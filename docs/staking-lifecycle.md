@@ -24,7 +24,7 @@ The public RPC returns all three: `getStakerByAddress` gives `balance` (active),
 
 ## Epochs
 
-- An epoch is 43,200 blocks. Blocks are 1 s apart, so an epoch is about 12 h.
+- An epoch is 43,200 blocks. Blocks are *nominally* 1 s apart (`blockSeparationTime: 1000` in `getPolicyConstants`), but mainnet runs a little faster: about 0.996 s per block. Measured from two election blocks on 2026-10-21 (64,756,800 → 64,800,000), an epoch took **42,992,969 ms = 11.94 h**. Over a day that is about 5 minutes of drift, which matters (see below), so Kickback measures it (`epochClock` in `src/services/chain.ts`) instead of assuming 1 s blocks.
 - The first block of each epoch is an **election block**. Mainnet genesis is block 3,456,000, so the next election after block `h` is `3456000 + (floor((h − 3456000) / 43200) + 1) × 43200`.
 - Validator balances can't change during an epoch. **Every stake change counts from the next election block.**
 
@@ -37,7 +37,46 @@ The public RPC returns all three: `getStakerByAddress` gives `balance` (active),
 
 **When it starts earning:** the stake counts from the next election block, then earns for one epoch. The validator gets that epoch's rewards on chain (each batch is paid at the end of the following batch), and the pool pays stakers off chain on its own schedule.
 
-So the first kickback arrives at roughly: next election (0 to 12 h away) + one epoch (12 h) + the pool's next payout after that. That's **about 12 to 26 h**. Kickback computes it from the head block and the pool's observed payout times (`firstKickbackAt` in `src/services/chain.ts`). The dry-run walkthrough showed about 27 h.
+So the first kickback arrives at: next election (0 to 12 h away) + one epoch (12 h) + the pool's payout for that epoch. Direct pools pay right after each election block (Nimiq.Fun: 1 to 2 minutes after it, every epoch), so that's **about 12 to 26 h**.
+
+### How Kickback computes it (`firstKickbackAt`)
+
+Inputs, all from the real chain (also in dry run, where only the stake time is fake):
+
+- `clock`: the latest election block `L` and its timestamp `T_L`, plus the measured epoch length `ε = T_L − T_(L−43200)` (two `getBlockByNumber` calls, cached for a month since they never change, plus `getBlockNumber`).
+- `stakeAt`: when the stake was made. Real: the oldest stake transaction (to the staking contract) in the 30-day history, else the confirmed stake op. Dry run: the fake confirm time.
+- The pool's last payout `P` and payout interval `I` (from a probe staker's history).
+
+```
+idx(t)    = (t − T_L) / ε                 epoch position relative to the latest election
+e_earn    = ceil(idx(stakeAt)) + 1        election that closes the first epoch the stake earns in
+p         = floor(idx(P))                 election just before the pool's last payout
+offset    = P − (T_L + p·ε)               how long after an election the pool pays (Nimiq.Fun ≈ 2 min)
+n         = max(1, round(I / ε))          pool pays every n epochs
+e_pay     = p + ceil((e_earn − p) / n)·n  first pool payout election at or after e_earn
+first     = T_L + e_pay·ε + offset
+```
+
+Without pool timing: `T_L + e_earn·ε + 1 h`.
+
+### Worked example: stake now with Nimiq.Fun
+
+Readings from rpc.nimiqwatch.com on 2026-10-21:
+
+| | |
+|---|---|
+| Head block | 64,808,629 |
+| Latest election `L` | 64,800,000 at 14:21:07.862 UTC (`T_L` = 1792592467862) |
+| Election before it | 64,756,800 at 02:24:34.893 UTC |
+| Epoch length `ε` | 42,992,969 ms (11.94 h) |
+| Nimiq.Fun last payout `P` | 14:23:02.864 UTC, 1 min 55 s after the election; interval 11.95 h, so `n` = 1 |
+| Stake time | 16:44:22 UTC |
+
+1. Next election after the stake: `idx` = 0.20, so E1 = `T_L + 1·ε` = **02:17:41 UTC Oct 22** (block 64,843,200).
+2. The stake earns through that epoch, which closes at E2 = `T_L + 2·ε` = **14:14:14 UTC Oct 22**.
+3. Nimiq.Fun pays 1 min 55 s after E2: first kickback ≈ **14:16:09 UTC Oct 22, 21.5 h after staking**.
+
+**The 34 h bug (fixed):** the old code projected the elections from the head block with exactly 1 s per block. That put E2 at 14:20:33, about 6 minutes after the real one, and so *after* Nimiq.Fun's 14:16 payout for that epoch. It skipped that payout and picked the next one (02:14 Oct 23), **33.5 h** after staking. The drift (3 to 6 min) is always bigger than Nimiq.Fun's 2 min offset, so the estimate was always one payout (12 h) too late. The countdown also started from "now" instead of the stake time. Both are covered by `tests/epoch.test.ts`.
 
 ## 2. Stop earning (deactivate)
 

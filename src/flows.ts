@@ -146,8 +146,11 @@ export function goRun() {
   const flow = useFlow()
   clearTimers()
   if (isLive()) {
-    // A run in progress (or just finished) is shown as it is; otherwise a fresh review.
-    if (flow.runPhase !== 'running' && flow.runPhase !== 'done') reviewRun()
+    // A run still in progress is shown as it is. "Done" only belongs to the
+    // modal it finished in: any later open (after a swipe-down, back gesture
+    // or restart) starts from a fresh review, or the empty state.
+    if (flow.runPhase === 'done') clearFinished()
+    if (flow.runPhase !== 'running') reviewRun()
   }
   else flow.$patch({ doneMode: 'full', runPhase: 'review', steps: buildSteps() })
   go('run')
@@ -405,7 +408,7 @@ export function keepInstead() {
     // Keeping needs no transaction: mark what's ready as handled.
     const plan = usePlan(), luna = account.readyLuna
     return ui.closeSheet(() => {
-      plan.recordShared(luna)
+      plan.recordShared(luna, undefined, useWallet().isDry)
       go('home')
       ui.showToast(`${nim2(luna / 1e5)} NIM kept in your wallet.`, { undo: true, fn: () => { plan.ledger = plan.ledger.slice(0, -1) } })
     })

@@ -46,6 +46,13 @@ export const useAccount = defineStore('account', {
     poolLastPaidAt: null as number | null,
     /** Hours until the first kickback, for stakers with none yet. */
     firstInH: null as number | null,
+    /** Live: staked but no kickback from this pool yet; the countdown is to their first one. */
+    firstPending: false,
+    /** When that first kickback should land, and when the stake was made (ms). */
+    firstAt: null as number | null,
+    stakeAt: null as number | null,
+    /** When the next kickback (or the first one) should land, ms. */
+    nextKickbackAt: null as number | null,
     /** True until the first live data (cache or network) is applied. */
     liveLoading: false,
     /** When inactive stake can be withdrawn (ms), and how far along it is (0..1). */

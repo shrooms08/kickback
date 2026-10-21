@@ -73,8 +73,12 @@ export async function unstakeReadyAt(inactiveFrom: number): Promise<{ readyAt: n
 }
 
 // ---------- epochs ----------
-// Albatross: an epoch is 43,200 blocks of 1 s (12 h). Stake changes count from
-// the next election block (the first block of the next epoch).
+// Albatross: an epoch is 43,200 blocks. Stake changes count from the next
+// election block (the first block of the next epoch). Blocks are *nominally*
+// 1 s apart but run a little faster on mainnet (about 0.996 s), so an epoch is
+// about 11.94 h, not 12 h. Timing is measured from real election blocks: a few
+// minutes of drift matters, because pools pay a couple of minutes after each
+// election block (see docs/staking-lifecycle.md).
 export const GENESIS_BLOCK = 3_456_000
 export const BLOCKS_PER_EPOCH = 43_200
 
@@ -82,33 +86,65 @@ export function nextElectionBlock(head: number): number {
   return GENESIS_BLOCK + (Math.floor((head - GENESIS_BLOCK) / BLOCKS_PER_EPOCH) + 1) * BLOCKS_PER_EPOCH
 }
 
-export async function headBlock(): Promise<{ block: number, at: number }> {
-  const r = await rpc<number>('getBlockNumber', [], { ttl: 60e3 })
-  return { block: r.value, at: r.at }
-}
+/** Real epoch timing: the latest election block's time and the measured epoch length. */
+export interface EpochClock { block: number, at: number, epochMs: number }
 
-/** When the next epoch starts (ms), from a head block reading. */
-export function nextElectionAt(head: { block: number, at: number }): number {
-  return head.at + (nextElectionBlock(head.block) - head.block) * 1000
+/**
+ * Head block number, then the timestamps of the last two election blocks
+ * (immutable, cached for a month). Three 1-unit calls, two of them cached.
+ */
+export async function epochClock(): Promise<EpochClock> {
+  const head = await rpc<number>('getBlockNumber', [], { ttl: 60e3 })
+  const last = nextElectionBlock(head.value) - BLOCKS_PER_EPOCH
+  const [a, b] = await Promise.all([
+    rpc<{ timestamp: number }>('getBlockByNumber', [last, false], { ttl: 30 * 24 * H }),
+    rpc<{ timestamp: number }>('getBlockByNumber', [last - BLOCKS_PER_EPOCH, false], { ttl: 30 * 24 * H }),
+  ])
+  const measured = a.value.timestamp - b.value.timestamp
+  // Guard against a bad read: an epoch is 43,200 blocks of roughly 1 s.
+  const epochMs = measured > 10 * H && measured < 14 * H ? measured : BLOCKS_PER_EPOCH * 1000
+  return { block: last, at: a.value.timestamp, epochMs }
 }
 
 /**
- * When a new stake's first kickback should land: the stake counts from the
- * next election, earns for one epoch, then the pool pays at its next payout
- * after that epoch. Falls back to "epoch end + 1 h" without pool timing.
+ * Stand-in while the chain reading loads (or if it fails): a pool that pays
+ * every epoch marks the elections itself, a minute or two after each one.
  */
-export function firstKickbackAt(head: { block: number, at: number }, stats: PoolStats | null): number {
-  const earnedBy = nextElectionAt(head) + BLOCKS_PER_EPOCH * 1000
-  if (!stats?.lastPaidAt || !stats.intervalH) return earnedBy + 3600e3
-  const step = stats.intervalH * 3600e3
-  let t = stats.lastPaidAt
-  while (t < earnedBy) t += step
-  return t
+export function payoutClock(stats: PoolStats | null): EpochClock | null {
+  if (!stats?.lastPaidAt) return null
+  const every = stats.intervalH && stats.intervalH > 10 && stats.intervalH < 14 ? stats.intervalH * H : BLOCKS_PER_EPOCH * 1000
+  return { block: 0, at: stats.lastPaidAt, epochMs: every }
+}
+
+/** The first election at or after `t` (ms). Works for times before the clock's election too. */
+export function electionAfter(c: EpochClock, t: number): number {
+  return c.at + Math.ceil((t - c.at) / c.epochMs) * c.epochMs
+}
+
+/**
+ * When a stake made at `stakeAt` gets its first kickback:
+ *   1. it counts from the first election after `stakeAt` (E1),
+ *   2. it earns for that whole epoch, which closes at the next election (E2 = E1 + epoch),
+ *   3. the pool pays that epoch at its first payout after E2.
+ * Pools pay a fixed time after an election block (Nimiq.Fun: about 2 min), so
+ * the payout is found in epoch steps: the election before the pool's last
+ * payout, plus whole multiples of its payout interval (in epochs), plus the
+ * same offset. Without pool timing: E2 + 1 h.
+ */
+export function firstKickbackAt(c: EpochClock, stakeAt: number, stats: PoolStats | null): number {
+  const idx = (t: number) => (t - c.at) / c.epochMs
+  const earnedIdx = Math.ceil(idx(stakeAt)) + 1
+  if (!stats?.lastPaidAt) return c.at + earnedIdx * c.epochMs + H
+  const paidIdx = Math.floor(idx(stats.lastPaidAt))
+  const offset = Math.min(stats.lastPaidAt - (c.at + paidIdx * c.epochMs), c.epochMs)
+  const every = Math.max(1, Math.round((stats.intervalH ?? 12) * H / c.epochMs))
+  const payIdx = paidIdx + Math.ceil((earnedIdx - paidIdx) / every) * every
+  return c.at + payIdx * c.epochMs + offset
 }
 
 /** When stake deactivated now would be released: next election + one epoch. */
-export function releaseIfStoppedNow(head: { block: number, at: number }): number {
-  return nextElectionAt(head) + BLOCKS_PER_EPOCH * 1000 + 1000
+export function releaseIfStoppedNow(c: EpochClock): number {
+  return electionAfter(c, Date.now()) + c.epochMs + 1000
 }
 
 // ---------- history ----------
@@ -150,6 +186,8 @@ export interface Kickback {
   from: string
   /** Paid into stake (AddStake to the staking contract) instead of the wallet. */
   restaked: boolean
+  /** A dry-run fake. */
+  dry?: boolean
 }
 
 /** Incoming payouts to `address` from any of `rewardAddresses`. */

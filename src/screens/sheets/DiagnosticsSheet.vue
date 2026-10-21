@@ -18,6 +18,8 @@ import { useDry } from '../../stores/dry'
 import { useOps } from '../../stores/ops'
 import { navlog } from '../../lib/navlog'
 import { useNav } from '../../stores/nav'
+import { usePlan } from '../../stores/plan'
+import { clearFinished } from '../../money'
 import type { DryOutcome } from '../../stores/dry'
 import { parseNimInput } from '../../lib/money'
 import { nim2 } from '../../lib/format'
@@ -40,8 +42,24 @@ function toggleDry() {
   live.refresh({ force: true })
 }
 function setDryBalance() { dry.setBalance(parseNimInput(dryBal.value)); live.derive() }
-function addDryKickback() { const l = parseNimInput(dryKb.value); if (l > 0) { dry.addKickback(l); dryBal.value = nim2(dry.chain.balanceLuna / 1e5) } }
-function resetDry() { dry.reset(); dryBal.value = nim2(dry.chain.balanceLuna / 1e5); live.refresh({ force: true }) }
+const plan = usePlan()
+// A fake kickback lands in the fake wallet now and is ready to share (once a plan is saved).
+function addDryKickback() {
+  const l = parseNimInput(dryKb.value)
+  if (!(l > 0)) return
+  dry.addKickback(l)
+  dryBal.value = nim2(dry.chain.balanceLuna / 1e5)
+  live.derive()
+  ui.showToast(plan.planStartedAt == null ? 'Saved. It will be ready to share once you save a plan' : `Dry run: +${nim2(l / 1e5).replace(/\.00$/, '')} NIM kickback`)
+}
+// Reset also forgets what dry-run runs shared, so old dry shares never eat new fake kickbacks.
+function resetDry() {
+  dry.reset()
+  plan.clearDryLedger()
+  clearFinished()
+  dryBal.value = nim2(dry.chain.balanceLuna / 1e5)
+  live.refresh({ force: true })
+}
 const data = useData()
 const account = useAccount()
 const now = ref(Date.now())

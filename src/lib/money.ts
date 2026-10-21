@@ -74,17 +74,25 @@ export function runAmount(readyLuna: number, balanceLuna: number): { amount: num
 
 // ---------- ready-to-share ledger ----------
 
-export interface KickbackLike { at: number, luna: number, restaked?: boolean }
-export interface LedgerEntry { luna: number, at: number, hash?: string }
+export interface KickbackLike { at: number, luna: number, restaked?: boolean, dry?: boolean }
+/** One shared (or kept) amount. `dry` entries come from dry-run runs and never count against real kickbacks. */
+export interface LedgerEntry { luna: number, at: number, hash?: string, dry?: boolean }
 
 /**
  * Ready to share = kickbacks that landed in the wallet after the plan started,
  * minus everything already shared (ledger) and everything in flight. Kickbacks
  * paid straight into stake (AddStake) never reach the wallet, so they don't count.
+ * Dry-run kickbacks count as soon as a plan exists, whenever they were added.
+ * Pass only the ledger entries of the same mode (dry or real) as the kickbacks.
  */
 export function readyLuna(kickbacks: readonly KickbackLike[], planStartedAt: number | null, ledger: readonly LedgerEntry[], inFlightLuna = 0): number {
   if (planStartedAt == null) return 0
-  const received = kickbacks.filter(k => !k.restaked && k.at >= planStartedAt).reduce((a, k) => a + k.luna, 0)
+  const received = kickbacks.filter(k => !k.restaked && (k.dry || k.at >= planStartedAt)).reduce((a, k) => a + k.luna, 0)
   const done = ledger.reduce((a, e) => a + e.luna, 0)
   return Math.max(0, received - done - inFlightLuna)
+}
+
+/** The ledger entries of one mode: dry run or real. */
+export function ledgerFor(ledger: readonly LedgerEntry[], dry: boolean): LedgerEntry[] {
+  return ledger.filter(e => !!e.dry === dry)
 }

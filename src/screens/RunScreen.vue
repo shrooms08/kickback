@@ -10,7 +10,9 @@ import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
+import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
+import { now } from '../lib/time'
 import { ranksOf, splitCents } from '../lib/plan'
 import { splitLuna } from '../lib/money'
 import { shake } from '../lib/anim'
@@ -27,6 +29,18 @@ const running = computed(() => flow.runPhase === 'running')
 const done = computed(() => flow.runPhase === 'done')
 const partial = computed(() => done.value && flow.doneMode === 'partial')
 const fullDone = computed(() => done.value && !partial.value)
+/** Reopened with nothing ready: no "Done", no 0.00 NIM cards, just when the next kickback lands. */
+const empty = computed(() => review.value && (live.value ? a.readyLuna === 0 : a.readyCents === 0))
+const emptyLine = computed(() => {
+  if (!live.value) return 'Your next kickback lands in about 9h'
+  if (!a.staked) return 'Stake NIM to start earning kickbacks.'
+  if (a.notDirect) return 'Your pool adds rewards to your stake instead of paying them out.'
+  const at = a.nextKickbackAt
+  if (!at) return `Your ${a.firstPending ? 'first' : 'next'} kickback lands in about 12h`
+  const h = Math.max(1, Math.round((at - now.value) / 3600e3))
+  return `Your ${a.firstPending ? 'first' : 'next'} kickback lands in about ${h}h`
+})
+const emptyBar = computed(() => !live.value || (a.staked && !a.notDirect))
 
 const srec = computed(() => plan.contact(plan.savedRecipient))
 const SLICE: Record<RunStep['type'], number> = { send: 0, restake: 1, keep: 2, retire: 1, remove: 2 }
@@ -43,7 +57,7 @@ const stack = computed(() => {
   return {
     pct: plan.saved,
     labels,
-    amounts: split.value.map(v => nim2(v) + ' NIM'),
+    amounts: empty.value ? ['', '', ''] : split.value.map(v => nim2(v) + ' NIM'),
     ranks: ranksOf(plan.saved),
     visible: plan.hasContacts ? [0, 1, 2] : [1, 2],
     zeroed: done.value ? failed.value : [],
@@ -51,7 +65,7 @@ const stack = computed(() => {
 })
 
 const reason = computed(() => {
-  if (!review.value) return ''
+  if (!review.value || empty.value) return ''
   if (wallet.isPreview) return 'Preview is read only'
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
   if (live.value) {
@@ -104,19 +118,27 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       <button class="kb-icon-btn" aria-label="Close" @click="closeRun"><Icon name="close" :size="18" /></button>
     </div>
 
-    <h1 v-if="review" class="kb-h1">Ready to share {{ headline }} NIM</h1>
-    <p v-if="review && live && flow.runCapped" class="note">{{ flow.runCapped }}</p>
-    <p v-if="!done && live && flow.runNote" class="note">{{ flow.runNote }}</p>
+    <template v-if="empty">
+      <h1 class="kb-h1" data-kb="run-empty">Nothing to share yet</h1>
+      <div class="col10">
+        <p class="empty-line">{{ emptyLine }}</p>
+        <SegmentedBar v-if="emptyBar" :segments="12" :value="live ? a.hours : 4" pulse size="sm" />
+        <p v-if="live && plan.planStartedAt == null" class="note" style="margin-top: 0">Save your plan first. Kickbacks after that are shared with it.</p>
+      </div>
+    </template>
+    <h1 v-else-if="review" class="kb-h1">Ready to share {{ headline }} NIM</h1>
     <h1 v-else-if="running" class="kb-h1">Approve each step</h1>
     <h1 v-else-if="partial" class="kb-h1 big52">{{ okN }} of {{ flow.steps.length }} done</h1>
-    <div v-else class="done-h">
+    <div v-else-if="fullDone" class="done-h" data-kb="run-done">
       <h1 class="kb-h1 big64">Done</h1>
       <div class="done-tick"><Icon name="check" :size="26" :stroke="2.8" /></div>
     </div>
+    <p v-if="review && !empty && live && flow.runCapped" class="note">{{ flow.runCapped }}</p>
+    <p v-if="!done && !empty && live && flow.runNote" class="note">{{ flow.runNote }}</p>
 
     <TheStack v-bind="stack" size="run" :fill-key="flow.doneKey" />
 
-    <div class="dests" :style="{ gridTemplateColumns: plan.hasContacts ? 'repeat(3,minmax(0,1fr))' : 'repeat(2,minmax(0,1fr))' }">
+    <div v-if="!empty" class="dests" :style="{ gridTemplateColumns: plan.hasContacts ? 'repeat(3,minmax(0,1fr))' : 'repeat(2,minmax(0,1fr))' }">
       <div v-if="plan.hasContacts" class="dest">
         <div class="dest-ico lime" data-kb-dest="send">{{ srec.ini }}</div>
         <div class="dest-name">{{ srec.name }}</div><div class="dest-sub">Send</div>
@@ -131,7 +153,7 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       </div>
     </div>
 
-    <div v-if="!done" class="col10">
+    <div v-if="!done && !empty" class="col10">
       <div class="kb-eyebrow">Each step is approved in Nimiq Pay</div>
       <div class="kb-row-list">
         <div v-for="s in steps" :key="s.n" class="kb-row">
@@ -148,7 +170,7 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       <div class="keep-note">{{ keepNote }}</div>
     </div>
 
-    <div v-else class="kb-row-list">
+    <div v-else-if="done" class="kb-row-list">
       <div v-for="(s, i) in flow.steps" :key="i" class="kb-row done-row">
         <Icon v-if="s.st !== 'failed'" name="check" :size="18" :stroke="2.6" color="var(--kb-lime)" />
         <Icon v-else name="close" :size="18" :stroke="2.6" color="var(--kb-error)" />
@@ -175,7 +197,11 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
 
     <div class="foot">
       <div v-if="reason" class="kb-reason">{{ reason }}</div>
-      <HoldButton v-if="review" label="Hold to run my plan" :disabled="!!reason" @done="holdRunDone" @blocked="shake($event.currentTarget as Element)" />
+      <div v-if="empty" class="empty-actions">
+        <button class="kb-btn kb-btn-ghost" @click="changePlanFromRun">Edit plan</button>
+        <button class="kb-btn kb-btn-primary" @click="closeRun">Close</button>
+      </div>
+      <HoldButton v-else-if="review" label="Hold to run my plan" :disabled="!!reason" @done="holdRunDone" @blocked="shake($event.currentTarget as Element)" />
       <button v-if="stuck" class="kb-btn kb-btn-ghost" @click="closeRun">Back to home</button>
       <button v-if="done" class="kb-btn kb-btn-primary" @click="closeRun">Back to home</button>
     </div>
@@ -217,5 +243,8 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
 .next { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 20px; background: var(--kb-surface); }
 .next-t { font-size: 14px; line-height: 1.4; min-width: 0; }
 .foot { margin-top: auto; }
+.empty-line { font-size: 17px; font-weight: 700; line-height: 1.35; }
+.empty-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.empty-actions .kb-btn { height: 56px; }
 .note { font-size: 14px; line-height: 1.45; color: var(--kb-text-2); margin-top: -8px; }
 </style>

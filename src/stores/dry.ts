@@ -56,10 +56,12 @@ export const useDry = defineStore('dry', {
       return s.txs.filter(x => x.lands && t - x.sentAt >= DRY_CONFIRM_DELAY)
     },
     /** Fake wallet balance and staker after applying every landed transaction. */
-    chain(): { balanceLuna: number, staker: Staker | null, inactiveSince: number | null } {
+    chain(): { balanceLuna: number, staker: Staker | null, inactiveSince: number | null, stakedAt: number | null } {
       let balance = this.baseBalanceLuna + this.kickbacks.reduce((a, k) => a + k.luna, 0)
       let st: Staker | null = this.baseStaker ? { ...this.baseStaker } : null
       let inactiveSince: number | null = null
+      /** When the current fake stake first confirmed (the "stake time" for first-kickback maths). */
+      let stakedAt: number | null = null
       for (const tx of this.landed) {
         const r = tx.req, at = tx.sentAt + DRY_CONFIRM_DELAY
         switch (r.kind) {
@@ -67,6 +69,7 @@ export const useDry = defineStore('dry', {
           case 'newStaker':
             balance -= r.value
             st = { address: '', balance: r.value, delegation: r.delegation!, inactiveBalance: 0, inactiveFrom: null, retiredBalance: 0 }
+            stakedAt = at
             break
           case 'addStake': balance -= r.value; if (st) st.balance += r.value; break
           case 'setActive':
@@ -87,14 +90,14 @@ export const useDry = defineStore('dry', {
           case 'remove':
             if (st) {
               st.retiredBalance -= r.value; balance += r.value
-              if (st.balance + st.inactiveBalance + st.retiredBalance === 0) st = null
+              if (st.balance + st.inactiveBalance + st.retiredBalance === 0) { st = null; stakedAt = null }
             }
             break
         }
       }
       if (st && st.inactiveBalance === 0 && st.retiredBalance === 0) inactiveSince = null
       if (st && st.inactiveBalance > 0 && inactiveSince == null) inactiveSince = st.inactiveFrom
-      return { balanceLuna: balance, staker: st, inactiveSince }
+      return { balanceLuna: balance, staker: st, inactiveSince, stakedAt }
     },
   },
   actions: {
@@ -109,7 +112,12 @@ export const useDry = defineStore('dry', {
       this.baseBalanceLuna += luna - this.chain.balanceLuna
       this.save()
     },
-    addKickback(luna: number) { this.kickbacks.push({ at: Date.now(), luna }); this.save() },
+    /** A fake kickback, dated now. It lands in the fake wallet and counts as ready to share once a plan is saved. */
+    addKickback(luna: number) {
+      const last = this.kickbacks[this.kickbacks.length - 1]?.at ?? 0
+      this.kickbacks.push({ at: Math.max(Date.now(), last + 1), luna })
+      this.save()
+    },
     /** Make fake inactive stake releasable right away. */
     releaseNow() { this.releaseMs = 0; this.save() },
     reset() {

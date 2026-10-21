@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  FEE_RESERVE_LUNA, LUNA, MIN_STAKE_LUNA, checkStake, maxStake, parseNimInput, readyLuna, runAmount, splitLuna, spendable,
+  FEE_RESERVE_LUNA, LUNA, MIN_STAKE_LUNA, checkStake, ledgerFor, maxStake, parseNimInput, readyLuna, runAmount, splitLuna, spendable,
 } from '../src/lib/money'
 
 describe('splitLuna', () => {
@@ -88,5 +88,23 @@ describe('readyLuna ledger', () => {
   it('failed or cancelled steps stay ready because they never enter the ledger', () => {
     const ledgerAfterPartialRun = [{ luna: 250, at: start + 9 }] // send ok, restake failed (not recorded)
     expect(readyLuna(kb, start, ledgerAfterPartialRun)).toBe(250)
+  })
+})
+
+describe('readyLuna dry run', () => {
+  const start = 1_000_000
+  it('a dry-run kickback added before the plan was saved counts once the plan exists', () => {
+    const kb = [{ at: start - 60_000, luna: 2_500_000, dry: true }]
+    expect(readyLuna(kb, null, [])).toBe(0)
+    expect(readyLuna(kb, start, [])).toBe(2_500_000)
+  })
+  it('dry-run shares never eat real kickbacks, and a reset dry ledger frees new fake ones', () => {
+    const ledger = [{ luna: 2_500_000, at: start + 5, dry: true }, { luna: 100, at: start + 6 }]
+    const real = [{ at: start + 1, luna: 300 }]
+    expect(readyLuna(real, start, ledgerFor(ledger, false))).toBe(200)
+    // After "Reset dry run" the old fake kickback is gone; its share must go too.
+    const fresh = [{ at: start + 10, luna: 2_500_000, dry: true }]
+    expect(readyLuna(fresh, start, ledgerFor(ledger, true))).toBe(0) // the bug: old dry share still subtracted
+    expect(readyLuna(fresh, start, ledgerFor(ledger.filter(e => !e.dry), true))).toBe(2_500_000)
   })
 })

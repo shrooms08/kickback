@@ -38,11 +38,12 @@ export function whenLabel(t: number, ref = Date.now()): string {
   return `${monthDay(t)} · ${hhmm(t)}`
 }
 
-/** "09:04" today, otherwise "Yesterday 21:04" / "Oct 19 21:04". */
+/** "09:04" today, otherwise "yesterday 21:04" / "tomorrow 14:16" / "Oct 19 21:04". */
 export function clockOrDay(t: number, ref = Date.now()): string {
   const d = dayLabel(t, ref)
   if (d === 'Today') return hhmm(t)
   if (d === 'Yesterday') return `yesterday ${hhmm(t)}`
+  if (Math.round((startOfDay(t) - startOfDay(ref)) / DAY) === 1) return `tomorrow ${hhmm(t)}`
   return `${monthDay(t)} ${hhmm(t)}`
 }
 

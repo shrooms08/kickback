@@ -26,6 +26,12 @@ const data = useData()
 const wallet = useWallet()
 const live = computed(() => !wallet.isMock)
 const stakedParts = computed(() => nimParts(a.stakedNim))
+// Wallet: the fake balance in dry run, RPC getAccountByAddress in preview, getBalance otherwise.
+const walletParts = computed(() => nimParts(a.walletNim))
+const walletKnown = computed(() => wallet.balanceKnown)
+const walletSub = computed(() => wallet.isPreview ? 'Preview address' : wallet.isDry ? 'Dry run balance' : 'Free to spend')
+// Live new staker: the big countdown is to their own first kickback.
+const firstPending = computed(() => live.value && a.firstPending)
 
 // Live: someone still earning on active stake keeps the countdown and sees the
 // Unstaking card below it; the card only replaces the countdown when nothing is active.
@@ -38,10 +44,12 @@ const mode = computed(() => {
   return 'normal'
 })
 const earnedShow = computed(() => !a.stakePending && a.earnedCents > 0)
+const earnedLabel = computed(() => live.value && !a.earnedComplete && !firstPending.value ? 'Earned (last 30 days)' : 'Earned so far')
 const firstLine = computed(() => `Your first kickback lands in about ${live.value ? (a.firstInH ?? 12) : 9}h.`)
 const earnedNote = computed(() => {
   if (a.stakePending) return 'Starts with your first kickback, about 12h after your stake confirms.'
   if (a.notDirect) return 'Your pool adds rewards to your stake instead of paying them out.'
+  if (firstPending.value) return '0.00 NIM, first one on the way'
   return firstLine.value
 })
 const lateLine = computed(() => {
@@ -50,7 +58,10 @@ const lateLine = computed(() => {
   const every = Math.round(data.pool(a.pool).intervalH || 12)
   return `${a.poolName} usually pays every ${every}h. Last paid ${a.poolLastPaidAt ? span(Date.now() - a.poolLastPaidAt) : 'a while'} ago.`
 })
-const headline = computed(() => a.nextIn ? `Next kickback in ${a.nextIn}` : 'Waiting for your first kickback')
+const headline = computed(() => {
+  if (firstPending.value) return `First kickback in ${a.nextIn}`
+  return a.nextIn ? `Next kickback in ${a.nextIn}` : 'Waiting for your first kickback'
+})
 const earnedSub = computed(() => live.value ? `from ${a.kbCount} kickback${a.kbCount === 1 ? '' : 's'}` : `about $${nim2(a.earnedNim * NIM_USD)} · from ${a.kbCount} kickbacks`)
 const readySub = computed(() => {
   if (live.value && plan.planStartedAt == null) return 'Save your plan to start sharing'
@@ -106,12 +117,12 @@ const poolPaid = computed(() => {
       <UnstakingCard v-if="a.unstaking && !unstakingOnly" />
 
       <div class="block8">
-        <div class="kb-eyebrow">{{ live && !a.earnedComplete ? 'Earned (last 30 days)' : 'Earned so far' }}</div>
+        <div class="kb-eyebrow">{{ earnedLabel }}</div>
         <template v-if="earnedShow">
           <NimAmount id="earned" :value="a.earnedNim" :size="64" :dec-size="36" />
           <div class="sub">{{ earnedSub }}</div>
         </template>
-        <div v-else class="note">{{ earnedNote }}</div>
+        <div v-else class="note" data-kb="earned-note">{{ earnedNote }}</div>
       </div>
 
       <div class="ready" data-kb="ready-card">
@@ -127,12 +138,18 @@ const poolPaid = computed(() => {
       </div>
 
       <div class="grid2">
+        <div class="mini" data-kb="wallet-stat">
+          <div class="kb-eyebrow">Wallet</div>
+          <div v-if="walletKnown" class="mini-v kb-num" style="color: var(--kb-numc)" data-kb="wallet-amt">{{ walletParts[0] }}<span class="kb-dim">{{ walletParts[1] }}</span> NIM</div>
+          <div v-else class="mini-v kb-dim">…</div>
+          <div class="meta">{{ walletSub }}</div>
+        </div>
         <div class="mini kb-press-soft" @click="goPoolTab">
           <div class="kb-eyebrow">Staked</div>
           <div class="mini-v kb-num" style="color: var(--kb-numc)">{{ stakedParts[0] }}<span class="kb-dim">{{ stakedParts[1] }}</span> NIM</div>
           <div class="meta">Never touched</div>
         </div>
-        <div class="mini kb-press-soft" @click="goPoolTab">
+        <div class="mini wide kb-press-soft" @click="goPoolTab">
           <div class="kb-eyebrow">Pool</div>
           <div class="mini-v ell">{{ a.poolName }}</div>
           <div class="meta paid"><span class="kb-dot" :style="{ background: a.poolDown ? 'var(--kb-error)' : 'var(--kb-lime)' }" />{{ poolPaid }}</div>
@@ -153,7 +170,7 @@ const poolPaid = computed(() => {
           <KickbackRow v-for="r in data.recent" :key="r.when" :amt="r.amt" :sub="`${a.poolName} · ${r.when}`" :waiting="r.waiting" />
         </div>
         <div v-else class="empty">
-          <div class="empty-t">{{ a.notDirect ? 'Kickbacks show up here with a direct-payout pool.' : firstLine }}</div>
+          <div class="empty-t">{{ a.notDirect ? 'Kickbacks show up here with a direct-payout pool.' : firstPending ? 'No kickbacks yet' : firstLine }}</div>
           <div class="meta">Each one will show up here.</div>
         </div>
       </div>
@@ -183,6 +200,7 @@ const poolPaid = computed(() => {
 .share.off { background: var(--kb-raised); color: var(--kb-text-2); }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .mini { border-radius: var(--kb-r-card); background: var(--kb-surface); padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.mini.wide { grid-column: 1 / -1; }
 .mini-v { font-size: 22px; font-weight: 800; letter-spacing: -0.03em; transition: color 300ms; }
 .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .paid { display: flex; align-items: center; gap: 6px; }

@@ -20,7 +20,7 @@ import { useOps, TERMINAL } from './stores/ops'
 import type { Op, OpFlow } from './stores/ops'
 import { currentStaker, useLive } from './stores/live'
 import { useDry } from './stores/dry'
-import { headBlock, nextElectionAt, releaseIfStoppedNow, sameAddr } from './services/chain'
+import { electionAfter, epochClock, releaseIfStoppedNow, sameAddr } from './services/chain'
 import type { SendRequest } from './services/sendTypes'
 import { checkStake, maxStake, parseNimInput, runAmount, splitLuna, spendable } from './lib/money'
 import { nim2 } from './lib/format'
@@ -175,8 +175,8 @@ export async function switchLive() {
     const left = account.unstakeReadyAt ? span(account.unstakeReadyAt - Date.now()) : 'a while'
     return ui.showToast(`Your NIM is released in about ${left}. Then you can pick the new pool.`)
   }
-  const head = await headBlock().catch(() => null)
-  const effectiveAt = head ? nextElectionAt(head) : Date.now() + 12 * 3600e3
+  const clock = await epochClock().catch(() => null)
+  const effectiveAt = clock ? electionAfter(clock, Date.now()) : Date.now() + 12 * 3600e3
   await approveAndConfirm('switch', 'switch', { kind: 'updateStaker', value: 0, newDelegation: target.validator }, { from: st.delegation, effectiveAt }, () => {
     go('pool')
     ui.showToast(`Switch to ${target.name} started. Nothing else to do.`)
@@ -187,9 +187,9 @@ export async function switchLive() {
 export async function hoursToReleaseIfStopped(): Promise<number> {
   const dry = useDry(), wallet = useWallet()
   if (dry.on && !wallet.isPreview) return Math.max(1, Math.round((dry.releaseMs + 3000) / 3600e3))
-  const head = useLive().head ?? await headBlock().catch(() => null)
-  if (!head) return 24
-  return Math.max(1, Math.ceil((releaseIfStoppedNow(head) - Date.now()) / 3600e3))
+  const clock = useLive().clock ?? await epochClock().catch(() => null)
+  if (!clock) return 24
+  return Math.max(1, Math.ceil((releaseIfStoppedNow(clock) - Date.now()) / 3600e3))
 }
 
 // ---------- Run my plan ----------
@@ -331,7 +331,7 @@ async function walkSteps(from: number) {
     if (s.st !== 'pending') continue
     if (s.type === 'keep') {
       setStep(i, { st: 'approved' })
-      plan.recordShared(s.luna ?? 0)
+      plan.recordShared(s.luna ?? 0, undefined, useWallet().isDry)
       continue
     }
     const req: SendRequest = s.type === 'send'
@@ -350,7 +350,7 @@ async function walkSteps(from: number) {
     if (op.phase === 'confirming' || op.phase === 'confirmed') {
       if (s.type === 'send' || s.type === 'restake') fxStep(s.type)
       // Recorded as shared once it is in a block; failures stay ready to share.
-      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash) ; syncRunSteps(); maybeFinish() })
+      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash, final.dry); syncRunSteps(); maybeFinish() })
     }
     syncRunSteps()
   }

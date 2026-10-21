@@ -53,8 +53,8 @@ export const usePlan = defineStore('plan', {
   getters: {
     hasContacts: s => s.contacts.length > 0,
     dirty: s => !sameSplit(s.pct, s.saved) || s.recipient !== s.savedRecipient,
-    /** When the plan last ran (latest ledger entry). */
-    lastRunAt: s => s.ledger.reduce((m, e) => Math.max(m, e.at), 0) || null,
+    /** When the plan last ran in a mode (latest ledger entry of that mode). */
+    lastRunAtFor: s => (dry: boolean) => s.ledger.reduce((m, e) => !!e.dry === dry ? Math.max(m, e.at) : m, 0) || null,
     /** The saved plan as ordered slices: send (per contact), restake, keep. */
     slices(s): Slice[] {
       const out: Slice[] = []
@@ -107,10 +107,15 @@ export const usePlan = defineStore('plan', {
       subscribed = true
       this.$subscribe(() => this.persist())
     },
-    /** A step succeeded: its amount is no longer ready to share. */
-    recordShared(luna: number, hash?: string) {
+    /** A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones. */
+    recordShared(luna: number, hash?: string, dry = false) {
       if (luna <= 0) return
-      this.ledger.push({ luna, at: Date.now(), hash })
+      this.ledger.push({ luna, at: Date.now(), hash, ...(dry ? { dry: true } : {}) })
+      this.persist()
+    },
+    /** Reset dry run: forget what dry-run runs shared. */
+    clearDryLedger() {
+      this.ledger = this.ledger.filter(e => !e.dry)
       this.persist()
     },
     addContact(name: string, address?: string) {

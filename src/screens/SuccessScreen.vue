@@ -10,7 +10,7 @@ import { useWallet } from '../stores/wallet'
 import { useOps } from '../stores/ops'
 import { useLive } from '../stores/live'
 import { int0, nim2 } from '../lib/format'
-import { firstKickbackAt, headBlock } from '../services/chain'
+import { epochClock, firstKickbackAt } from '../services/chain'
 import { successHome } from '../flows'
 
 const flow = useFlow()
@@ -28,10 +28,11 @@ const failed = computed(() => op.value?.phase === 'failed')
 const firstH = ref<number | null>(null)
 onMounted(async () => {
   if (wallet.isMock) return
-  const head = live.head ?? await headBlock().catch(() => null)
-  if (!head) return
+  const clock = live.clock ?? await epochClock().catch(() => null)
+  if (!clock) return
   const p = data.pool(flow.poolPick)
-  const at = firstKickbackAt(head, p.lastPaidAt && p.intervalH ? { alive: true, lastPaidAt: p.lastPaidAt, batches: [], intervalH: p.intervalH, source: 'probe', checkedAt: Date.now() } : null)
+  // Stake time: when the stake was sent (dry run: the fake send), else now.
+  const at = firstKickbackAt(clock, op.value?.sentAt ?? Date.now(), p.lastPaidAt && p.intervalH ? { alive: true, lastPaidAt: p.lastPaidAt, batches: [], intervalH: p.intervalH, source: 'probe', checkedAt: Date.now() } : null)
   firstH.value = Math.max(1, Math.round((at - Date.now()) / 3600e3))
 })
 const firstLine = computed(() => {

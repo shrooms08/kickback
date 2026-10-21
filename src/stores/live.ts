@@ -11,14 +11,14 @@ import { router } from '../router'
 import type { Pool } from '../services/mock'
 import { rpc } from '../services/rpc'
 import {
-  addressHistory, findKickbacks, firstKickbackAt, getAccountBalance, getStaker, getValidator, headBlock, learnProbe, norm, poolStats,
-  sameAddr, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
+  STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, firstKickbackAt, getAccountBalance, getStaker, getValidator, learnProbe, norm,
+  payoutClock, poolStats, sameAddr, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
 } from '../services/chain'
-import type { History, Kickback, PoolStats, Staker, Tx } from '../services/chain'
+import type { EpochClock, History, Kickback, PoolStats, Staker, Tx } from '../services/chain'
 import { directValidators, grossStakingApy, knownValidators, status, supply } from '../services/validators'
 import type { ApiValidator } from '../services/validators'
 import { cacheGet, cacheSet, pruneCache } from '../lib/cache'
-import { readyLuna } from '../lib/money'
+import { ledgerFor, readyLuna } from '../lib/money'
 import { ago, clockOrDay, duration, hhmm, now, startClock } from '../lib/time'
 
 const H = 3600e3
@@ -37,8 +37,10 @@ interface Snapshot {
   userStats: PoolStats | null
   /** Real inactive-stake timing (ms). */
   unstake: { readyAt: number, startedAt: number } | null
-  /** Head block reading, for epoch timing. */
-  head: { block: number, at: number } | null
+  /** Real epoch timing (last election block, measured epoch length). */
+  clock?: EpochClock | null
+  /** When the current stake was made (oldest stake transaction in the 30-day history). */
+  stakeAt?: number | null
   pools: Pool[]
   known: Record<string, Pool>
   /** Reward addresses of every direct pool we know (for kickback detection). */
@@ -56,6 +58,7 @@ let lastHistory: History | null = null
 let timer = 0
 let generation = 0
 let scanning = false
+let clockLoading = false
 
 const feePct = (f: number) => `${+(f * 100).toFixed(2)}%`
 
@@ -125,7 +128,7 @@ export const useLive = defineStore('live', {
   }),
   getters: {
     active: () => { const w = useWallet(); return w.connected && !w.isMock },
-    head: () => snap?.head ?? null,
+    clock: () => snap?.clock ?? null,
     userStats: () => snap?.userStats ?? null,
   },
   actions: {
@@ -209,9 +212,14 @@ export const useLive = defineStore('live', {
 
         // Epoch timing (only when needed: inactive stake, new stakers).
         let unstake: Snapshot['unstake'] = null
-        let head = snap?.head ?? null
-        const needsHead = !!staker && (staker.inactiveBalance > 0 || kickbacks.length === 0)
-        if (needsHead) head = await headBlock().catch(() => head)
+        // Epoch timing (first-kickback estimate, Success, switch sheet) loads in the background:
+        // it can queue behind the pool reads in the RPC budget and must not hold up Home.
+        const known = snap?.clock
+        if (!known || Date.now() - known.at > 2 * known.epochMs) this.loadClock(gen)
+        // Stake time for the first-kickback estimate: the oldest stake transaction we can see.
+        const me = norm(address)
+        const stakeTxs = history.txs.filter(x => norm(x.from) === me && sameAddr(x.to, STAKING_CONTRACT) && x.value > 0 && x.executionResult !== false)
+        const stakeAt = stakeTxs.length ? Math.min(...stakeTxs.map(x => x.timestamp)) : null
         if (staker && !(dry.on && !wallet.isPreview)) {
           if (staker.inactiveBalance > 0 && staker.inactiveFrom) unstake = await unstakeReadyAt(staker.inactiveFrom).catch(() => snap?.unstake ?? null)
           else if (staker.retiredBalance > 0) unstake = { readyAt: Date.now(), startedAt: Date.now() }
@@ -227,7 +235,8 @@ export const useLive = defineStore('live', {
           userPool,
           userStats,
           unstake,
-          head,
+          clock: snap?.clock ?? null,
+          stakeAt,
           pools: snap?.pools ?? [],
           known: { ...prevKnown, ...(userPool ? { [userPool.id]: userPool } : {}) },
           rewards,
@@ -250,6 +259,19 @@ export const useLive = defineStore('live', {
         this.refreshing = false
         account.refreshing = false
       }
+    },
+
+    /** Real epoch timing from election blocks; re-derives when it arrives. */
+    async loadClock(gen: number) {
+      if (clockLoading) return
+      clockLoading = true
+      try {
+        const clock = await epochClock()
+        if (gen !== generation || !snap) return
+        this.apply({ ...snap, clock }, 'keep')
+      }
+      catch { /* the payout-based estimate stands in until the next refresh */ }
+      finally { clockLoading = false }
     },
 
     /** Validators API, pool list, the user's pool name and fee, all in the background. */
@@ -407,7 +429,7 @@ export const useLive = defineStore('live', {
       const byHash = new Map<string, Kickback>()
       for (const k of snap.kickbacks) byHash.set(k.hash, k)
       if (full) for (const i of full.items) if (rewards.has(norm(i.f)) && !byHash.has(i.h)) byHash.set(i.h, { hash: i.h, at: i.t, luna: i.v, from: i.f, restaked: i.r })
-      if (dry.on && !wallet.isPreview) for (const k of dry.kickbacks) byHash.set('dry' + k.at, { hash: 'dry' + k.at, at: k.at, luna: k.luna, from: snap.userPool?.reward || 'Dry run', restaked: false })
+      if (dry.on && !wallet.isPreview) dry.kickbacks.forEach((k, i) => byHash.set(`dry${i}:${k.at}`, { hash: `dry${i}:${k.at}`, at: k.at, luna: k.luna, from: snap!.userPool?.reward || 'Dry run', restaked: false, dry: true }))
       const list = [...byHash.values()].sort((a, b) => b.at - a.at)
       const complete = !!full?.complete
       const earnedLuna = (complete ? list : list.filter(k => k.at >= Date.now() - 30 * 24 * H)).reduce((a, k) => a + k.luna, 0)
@@ -428,10 +450,11 @@ export const useLive = defineStore('live', {
       const staked = !!st && (st.balance + st.inactiveBalance + st.retiredBalance) > 0
 
       // Ready to share: wallet kickbacks since the plan started, minus what's shared or in flight.
-      const inFlight = ops.active.filter(o => o.flow === 'run').reduce((a, o) => a + o.req.value, 0)
-      const ready = readyLuna(kick, plan.planStartedAt, plan.ledger, inFlight)
-      const since = Math.max(plan.planStartedAt ?? Infinity, plan.lastRunAt ?? 0)
-      const waiting = plan.planStartedAt == null ? 0 : kick.filter(k => !k.restaked && k.at >= since).length
+      // Dry-run shares only count against dry-run kickbacks (and the other way round).
+      const inFlight = ops.active.filter(o => o.flow === 'run' && o.dry === isDry).reduce((a, o) => a + o.req.value, 0)
+      const ready = readyLuna(kick, plan.planStartedAt, ledgerFor(plan.ledger, isDry), inFlight)
+      const since = Math.max(plan.planStartedAt ?? Infinity, plan.lastRunAtFor(isDry) ?? 0)
+      const waiting = plan.planStartedAt == null ? 0 : kick.filter(k => !k.restaked && (k.dry ? k.at >= (plan.lastRunAtFor(true) ?? 0) : k.at >= since)).length
 
       const stats = snap.userStats
       const own = snap.userPool?.reward ? kick.filter(k => sameAddr(k.from, snap!.userPool!.reward)) : []
@@ -441,11 +464,24 @@ export const useLive = defineStore('live', {
       const over = nextAt ? t - nextAt : 0
       const notDirect = staked && !!snap.userPool && snap.userPool.payoutType !== 'direct' && snap.userPool.payoutType !== 'unknown'
       const poolLast = stats?.lastPaidAt ?? null
-      let firstIn: number | null = null
-      if (staked && own.length === 0) {
-        const at = snap.head ? firstKickbackAt(snap.head, stats) : (poolLast ? poolLast + interval : null)
-        if (at) firstIn = Math.max(1, Math.ceil((at - t) / H))
+      // New staker (no kickback from this pool yet): count down to *their* first kickback,
+      // from the stake time (dry run: the fake confirm time; the epoch maths stays on the real chain).
+      const firstPending = staked && !notDirect && own.length === 0
+      let stakeAt: number | null = null, firstAt: number | null = null
+      if (firstPending) {
+        if (isDry) stakeAt = chain!.stakedAt
+        else {
+          const op = ops.latest('stake')
+          stakeAt = snap.stakeAt ?? (op && op.phase === 'confirmed' && !op.dry ? (op.sentAt ?? op.startedAt) : null)
+        }
+        // Pool timing: the user's pool stats, else what the pool list already knows about it.
+        const p = st ? (snap.known[st.delegation] ?? snap.pools.find(x => sameAddr(x.validator, st.delegation))) : null
+        const timing: PoolStats | null = stats ?? (p?.lastPaidAt ? { alive: true, lastPaidAt: p.lastPaidAt, batches: [], intervalH: p.intervalH ?? null, source: 'probe', checkedAt: t } : null)
+        const clock = snap.clock ?? payoutClock(timing)
+        firstAt = clock ? firstKickbackAt(clock, stakeAt ?? t, timing) : null
       }
+      const firstIn = firstAt ? Math.max(1, Math.ceil((firstAt - t) / H)) : null
+      const firstFrom = stakeAt ?? (firstAt ? Math.min(t, firstAt - 24 * H) : t)
 
       // Inactive stake: real timing, or the fake chain's.
       let unstake = snap.unstake
@@ -482,10 +518,23 @@ export const useLive = defineStore('live', {
         kbEmpty: recent.length === 0,
         emptyAcct: staked && recent.length === 0,
         noPayouts: false,
-        hours: lastAt ? Math.max(0, Math.min(12, Math.round((t - lastAt) / interval * 12))) : 0,
-        nextIn: !nextAt ? '' : over <= 0 ? duration(nextAt - t) : 'a few min',
-        lastPaid: lastAt ? `Last paid ${clockOrDay(lastAt)}` : 'No kickbacks yet',
-        dueAt: nextAt ? `Due about ${hhmm(nextAt)}` : '',
+        ...(firstAt
+          ? {
+              hours: Math.max(0, Math.min(12, Math.round((t - firstFrom) / Math.max(1, firstAt - firstFrom) * 12))),
+              nextIn: firstAt > t ? duration(firstAt - t) : 'a few min',
+              lastPaid: stakeAt ? `Staked ${clockOrDay(stakeAt)}` : 'No kickbacks yet',
+              dueAt: `Due about ${clockOrDay(firstAt)}`,
+            }
+          : {
+              hours: lastAt ? Math.max(0, Math.min(12, Math.round((t - lastAt) / interval * 12))) : 0,
+              nextIn: !nextAt ? '' : over <= 0 ? duration(nextAt - t) : 'a few min',
+              lastPaid: lastAt ? `Last paid ${clockOrDay(lastAt)}` : 'No kickbacks yet',
+              dueAt: nextAt ? `Due about ${hhmm(nextAt)}` : '',
+            }),
+        firstPending: !!firstAt,
+        firstAt,
+        stakeAt,
+        nextKickbackAt: firstAt ?? nextAt,
         late: !notDirect && !!nextAt && over > 2 * H,
         poolLastPaidAt: poolLast,
         poolDown: !notDirect && staked && !!poolLast && t - poolLast > 36 * H,
