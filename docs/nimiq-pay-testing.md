@@ -1,12 +1,12 @@
 # Testing Kickback inside Nimiq Pay
 
-Production: https://kickback.vercel.app (Vercel project `kickback`, deploy with `npx vercel --prod`).
+Production: https://kickback-ecru.vercel.app (Vercel project `kickback`, deploy with `npx vercel --prod`).
 
 ## Open it (from the official docs, nimiq.dev/mini-apps)
 
 1. **Custom URL field (the documented dev route):** Nimiq Pay → **Mini Apps** → paste the URL into the **Custom URL** field.
-2. **HTTPS deeplink:** `https://nimpay.app/miniapps/open/kickback.vercel.app`, tapped on the phone.
-3. **Custom scheme:** `nimiqpay://miniapp?url=kickback.vercel.app`
+2. **HTTPS deeplink:** `https://nimpay.app/miniapps/open/kickback-ecru.vercel.app`, tapped on the phone.
+3. **Custom scheme:** `nimiqpay://miniapp?url=kickback-ecru.vercel.app`
 
 For links 2 and 3, Nimiq Pay shows a warning first if the URL isn't in its mini app list or has never been opened.
 The docs write the target without `https://`.
