@@ -89,8 +89,8 @@ describe('slice validation (sync PUT)', () => {
     expect(() => validateSlices(plan(10, 55, 35).slice(0, 2), ids)).toThrow(ValidationError)
   })
   it('a send slice needs one of the owner\'s contacts', () => {
-    expect(() => validateSlices(plan(10, 55, 35, 'someone-else'), ids)).toThrow('contacts')
-    expect(() => validateSlices(plan(10, 55, 35, null), ids)).toThrow('contacts')
+    expect(() => validateSlices(plan(10, 55, 35, 'someone-else'), ids)).toThrow('not saved')
+    expect(() => validateSlices(plan(10, 55, 35, null), ids)).toThrow('needs one of your contacts')
   })
 })
 

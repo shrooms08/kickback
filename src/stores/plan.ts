@@ -74,7 +74,7 @@ export const usePlan = defineStore('plan', {
     /** The saved plan as ordered slices: send (per contact), restake, keep. */
     slices(s): Slice[] {
       const out: Slice[] = []
-      const c = s.contacts.find(x => x.id === s.savedRecipient)
+      const c = s.contacts.find(x => x.id === s.savedRecipient) ?? (s.saved[0] > 0 ? s.contacts[0] : undefined)
       if (c && s.saved[0] > 0) out.push({ kind: 'send', pct: s.saved[0], contact: c })
       if (s.saved[1] > 0) out.push({ kind: 'restake', pct: s.saved[1] })
       // Keep is always last so it takes any rounding remainder.
@@ -86,15 +86,24 @@ export const usePlan = defineStore('plan', {
     contact(id: string | null): Contact {
       return this.contacts.find(c => c.id === id) || this.contacts[0] || { id: '', name: '', ini: '' }
     },
+    /**
+     * The recipient the screens show for an id: that contact, else the first contact (what
+     * contact() displays), else none. Stored explicitly so the saved plan is what was on screen.
+     */
+    resolveRecipient(id: string | null): string | null {
+      return this.contacts.find(c => c.id === id)?.id ?? this.contacts[0]?.id ?? null
+    },
     /** Opening the editor starts from the saved plan. */
     beginEdit() {
       this.pct = this.saved.slice() as Split
-      this.recipient = this.savedRecipient
+      this.recipient = this.resolveRecipient(this.savedRecipient)
       this.dragRanks = null
     },
     save() {
       this.saved = this.pct.slice() as Split
-      this.savedRecipient = this.recipient
+      // The editor shows contact(recipient), which falls back to the first contact: save that one.
+      this.savedRecipient = this.resolveRecipient(this.recipient)
+      this.recipient = this.savedRecipient
       if (this.owner && this.planStartedAt == null) this.planStartedAt = Date.now()
       this.persist()
     },
@@ -107,6 +116,10 @@ export const usePlan = defineStore('plan', {
       const d: Persisted = p ?? { contacts: [], saved: NO_CONTACT_PLAN.slice() as Split, savedRecipient: null, planStartedAt: null, ledger: [] }
       lastWritten = ''
       this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
+      // Older plans could hold a send share with no recipient while Home and the Plan tab
+      // showed the first contact: store that contact, so what is shown is what runs and syncs.
+      if (this.contacts.length && !this.contacts.some(c => c.id === this.savedRecipient)) this.savedRecipient = this.resolveRecipient(this.savedRecipient)
+      this.recipient = this.savedRecipient
       this.autoPersist()
     },
     persist() {
@@ -144,7 +157,8 @@ export const usePlan = defineStore('plan', {
     applyServer(d: { contacts?: Contact[], saved?: Split, savedRecipient?: string | null, planStartedAt?: number | null, realLedger?: LedgerEntry[] }) {
       if (d.contacts) this.contacts = d.contacts
       if (d.saved) { this.saved = d.saved; this.pct = d.saved.slice() as Split }
-      if (d.savedRecipient !== undefined) { this.savedRecipient = d.savedRecipient; this.recipient = d.savedRecipient }
+      if (d.savedRecipient !== undefined) this.savedRecipient = d.savedRecipient
+      this.recipient = this.resolveRecipient(this.savedRecipient)
       if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
       if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
       this.persist()

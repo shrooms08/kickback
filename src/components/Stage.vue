@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { isTestnet } from '../lib/net'
+import { useSession } from '../stores/session'
 import { useRoute } from 'vue-router'
 import TabBar from './TabBar.vue'
 import Banner from './Banner.vue'
@@ -122,12 +123,15 @@ function setDim(n: ScreenName, el: unknown) { if (el) dimEls[n] = el as HTMLElem
 function setChrome(el: unknown) { chromeEl = (el as HTMLElement) || null }
 
 // ---------- banner (pushes the layers down) ----------
+const session = useSession()
 const banner = computed(() => {
   const scr = nav.screen
   if (!scr) return null
   const noBanner = scr === 'welcome' || scr === 'browser' || scr === 'connecting'
   if (account.offline && !noBanner) return { kind: 'offline' as const, text: 'You\'re offline. Nothing was sent. We\'ll update when you\'re back.', label: 'Retry', act: retryOnline }
   const mins = wallet.isMock ? 14 : account.staleMin
+  // The plan couldn't be backed up (rejected or invalid): it stays on the phone, Retry sends it again.
+  if (session.planError && isTab(scr)) return { kind: 'sync' as const, text: session.planError, label: 'Retry', act: () => session.retryPlan() }
   if (account.stale && isTab(scr)) return { kind: 'stale' as const, text: account.refreshing ? 'Refreshing…' : `Showing data from ${mins >= 120 ? `${Math.round(mins / 60)}h` : `${mins} min`} ago`, label: account.refreshing ? 'Wait' : 'Refresh', act: refreshStale }
   if (account.poolDown && (scr === 'home' || scr === 'pool')) {
     const silent = wallet.isMock || !account.poolLastPaidAt ? '2 days' : span(now.value - account.poolLastPaidAt)

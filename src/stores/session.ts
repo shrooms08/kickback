@@ -3,11 +3,12 @@ import { watch } from 'vue'
 import { BackendError, backendEnabled, callFn } from '../services/backend'
 import { isUserRejection, signMessage, toMessage } from '../services/nimiq'
 import { signInMessage } from '../lib/signin'
+import { planFromSlices, planProblem, slicesFromPlan } from '../lib/planSync'
+import type { PlanBody, ServerSlice } from '../lib/planSync'
 import { net } from '../lib/net'
 import { prefGet, prefSet } from '../lib/cache'
 import { isValidAddress } from '../lib/address'
 import type { LedgerEntry } from '../lib/money'
-import type { Split } from '../lib/plan'
 import type { Contact } from '../services/mock'
 import { useWallet } from './wallet'
 import { useDry } from './dry'
@@ -24,7 +25,6 @@ type Status = 'off' | 'signing' | 'signed' | 'declined' | 'error' | 'expired'
 type EventKind = 'connect' | 'sign_in' | 'stake' | 'add_stake' | 'plan_saved' | 'run_done' | 'stop' | 'withdraw' | 'switch'
 
 interface QueueItem { id: string, kind: 'plan' | 'share' | 'event', method: 'PUT' | 'POST', body: unknown, auth: boolean, tries: number }
-interface ServerSlice { type: 'send' | 'restake' | 'keep', percent: number, contact_id: string | null }
 interface ServerData {
   plan: { slices: ServerSlice[], plan_started_at: string | null, updated_at: string } | null
   contacts: Array<{ id: string, name: string, contact_address: string }>
@@ -32,6 +32,8 @@ interface ServerData {
 }
 
 const MAX_QUEUE = 100
+export const PLAN_BACKUP_FAILED = 'Couldn\'t back up your plan. It\'s still saved on this phone.'
+
 const canon = (a: string) => a.replace(/\s+/g, '').toUpperCase().replace(/(.{4})/g, '$1 ').trim()
 const k = (a: string) => a.replace(/\s+/g, '').toUpperCase()
 let retryTimer = 0
@@ -54,6 +56,10 @@ export const useSession = defineStore('session', {
     lastSyncAt: 0,
     queue: [] as QueueItem[],
     flushing: false,
+    /** Set when the plan could not be backed up (the local plan is kept); cleared by a good save. */
+    planError: '',
+    /** Last sync errors, newest last (Diagnostics). */
+    syncErrors: [] as Array<{ at: number, what: string }>,
   }),
   getters: {
     signedIn: s => s.status === 'signed' && !!s.token && s.expiresAt > Date.now(),
@@ -136,6 +142,19 @@ export const useSession = defineStore('session', {
       }
     },
 
+    logError(what: string) {
+      this.syncErrors.push({ at: Date.now(), what })
+      if (this.syncErrors.length > 10) this.syncErrors.splice(0, this.syncErrors.length - 10)
+    },
+
+    /** Banner Retry: check the local plan again and send it. */
+    retryPlan() {
+      this.planError = ''
+      if (!this.signedIn) { void this.signIn(); return }
+      this.pushPlan()
+    },
+
+    /** Sign out never touches the local plan, contacts or shares. */
     signOut() {
       this.token = null
       this.expiresAt = 0
@@ -160,14 +179,35 @@ export const useSession = defineStore('session', {
       if (server.contacts.length) patch.contacts = server.contacts.map(fromServerContact)
       else if (localContacts.length) upload.contacts = localContacts.map(toServerContact)
 
+      // The server plan wins, unless it is invalid or would drop the send contact of a valid
+      // local plan (the old sync bug stored such plans): then the local plan stays and is re-sent.
+      const serverIds = new Set(server.contacts.map(c => c.id))
+      const localBody = this.planBody()
+      const localIds = new Set([...serverIds, ...localContacts.map(c => c.id)])
+      const localOk = (plan.planStartedAt != null || localContacts.length > 0) && !planProblem(localBody, localIds)
+      let keepLocal = false
       if (server.plan) {
-        const by = (t: ServerSlice['type']) => server.plan!.slices.find(s => s.type === t)
-        const send = by('send'), restake = by('restake'), keep = by('keep')
-        patch.saved = [send?.percent ?? 0, restake?.percent ?? 0, keep?.percent ?? 0] as Split
-        patch.savedRecipient = send?.contact_id ?? null
-        patch.planStartedAt = server.plan.plan_started_at ? Date.parse(server.plan.plan_started_at) : null
+        const problem = planProblem({ slices: server.plan.slices, plan_started_at: server.plan.plan_started_at }, serverIds)
+        const fromServer = planFromSlices(server.plan.slices)
+        const localSends = plan.saved[0] > 0 && !!plan.savedRecipient
+        const dropsSend = localSends && (fromServer.saved[0] === 0 || !fromServer.recipient)
+        keepLocal = localOk && (!!problem || dropsSend)
+        if (keepLocal) this.logError(`Server plan not applied (${problem || 'it would drop the send contact'}); kept this phone's plan and re-sent it.`)
+        else {
+          patch.saved = fromServer.saved
+          patch.savedRecipient = fromServer.recipient
+          patch.planStartedAt = server.plan.plan_started_at ? Date.parse(server.plan.plan_started_at) : null
+        }
       }
-      else if (plan.planStartedAt != null || localContacts.length) upload.plan = this.planBody()
+      else if (localOk) upload.plan = localBody
+      if (keepLocal) {
+        // Re-send the local plan with every contact from both sides, so nothing is deleted.
+        const all = new Map(server.contacts.map(c => [c.id, c]))
+        for (const c of localContacts) all.set(c.id, toServerContact(c))
+        upload.contacts = [...all.values()]
+        upload.plan = localBody
+        patch.contacts = [...all.values()].map(fromServerContact)
+      }
 
       const real = plan.ledger.filter(e => !e.dry).map(e => (e.id ? e : { ...e, id: crypto.randomUUID() }))
       const onServer = new Set(server.shares.map(s => s.id))
@@ -179,24 +219,21 @@ export const useSession = defineStore('session', {
       plan.applyServer(patch)
 
       if (upload.contacts || upload.plan) {
-        try { await callFn('sync', { method: 'PUT', body: upload, token: this.token }) }
-        catch (error) { if (!(error instanceof BackendError) || error.status === 0 || error.status >= 500) this.enqueue({ kind: 'plan', method: 'PUT', body: upload, auth: true }) }
+        try { await callFn('sync', { method: 'PUT', body: upload, token: this.token }); this.planError = '' }
+        catch (error) {
+          if (!(error instanceof BackendError) || error.status === 0 || error.status >= 500) this.enqueue({ kind: 'plan', method: 'PUT', body: upload, auth: true })
+          else { this.planError = PLAN_BACKUP_FAILED; this.logError(`Plan upload rejected: ${error.message}`) }
+        }
       }
       for (const e of missing) this.pushShare(e)
       this.lastSyncAt = Date.now()
     },
 
-    /** The saved plan as server slices (no contact means the send share is kept). */
-    planBody() {
+    /** The saved plan as server slices, exactly as saved. Invalid plans are rejected, never repaired. */
+    planBody(): PlanBody {
       const plan = usePlan()
-      const c = plan.contacts.find(x => x.id === plan.savedRecipient && x.address)
-      const [send, restake, keep] = plan.saved
       return {
-        slices: [
-          { type: 'send', percent: c ? send : 0, contact_id: c && send > 0 ? c.id : null },
-          { type: 'restake', percent: restake, contact_id: null },
-          { type: 'keep', percent: keep + (c ? 0 : send), contact_id: null },
-        ],
+        slices: slicesFromPlan(plan.saved, plan.savedRecipient),
         plan_started_at: plan.planStartedAt ? new Date(plan.planStartedAt).toISOString() : null,
       }
     },
@@ -212,7 +249,16 @@ export const useSession = defineStore('session', {
     pushPlan() {
       if (!this.signedIn || !this.eligible) return
       const plan = usePlan()
-      this.enqueue({ kind: 'plan', method: 'PUT', auth: true, body: { contacts: plan.contacts.filter(c => c.address && isValidAddress(c.address)).map(toServerContact), plan: this.planBody() } })
+      const contacts = plan.contacts.filter(c => c.address && isValidAddress(c.address))
+      const body = this.planBody()
+      const problem = planProblem(body, new Set(contacts.map(c => c.id)))
+      if (problem) {
+        // Keep the local plan as it is; tell the user it isn't backed up.
+        this.planError = PLAN_BACKUP_FAILED
+        this.logError(`Plan not sent: ${problem}`)
+        return
+      }
+      this.enqueue({ kind: 'plan', method: 'PUT', auth: true, body: { contacts: contacts.map(toServerContact), plan: body } })
       this.flush()
     },
 
@@ -244,6 +290,7 @@ export const useSession = defineStore('session', {
           }
           try {
             await callFn('sync', { method: item.method, body: item.body, token: item.auth ? this.token : null })
+            if (item.kind === 'plan') this.planError = ''
             this.queue.shift()
             this.lastSyncAt = Date.now()
             this.persist()
@@ -257,6 +304,8 @@ export const useSession = defineStore('session', {
             }
             if (status >= 400 && status < 500) {
               this.error = `Sync rejected a ${item.kind}: ${(error as Error).message}`
+              this.logError(this.error)
+              if (item.kind === 'plan') this.planError = PLAN_BACKUP_FAILED
               this.queue.shift(); this.persist(); continue
             }
             item.tries++

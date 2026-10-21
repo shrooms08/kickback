@@ -146,6 +146,8 @@ const lines = computed(() => {
     ['Signed in', session.signedIn ? `yes · ${session.address} · ${net.network}` : `no · ${session.status}${!session.eligible ? ' (preview, dry run or not in Nimiq Pay: never signs in)' : ''}${session.error ? ` · ${session.error}` : ''}`],
     ['Token expires', session.signedIn ? new Date(session.expiresAt).toLocaleString('en-GB') : 'n/a'],
     ['Last sync', session.lastSyncAt ? `${ago(session.lastSyncAt)} (${new Date(session.lastSyncAt).toLocaleTimeString('en-GB')})` : 'never'],
+    ['Plan backup', session.planError ? `FAILED: ${session.planError}` : session.signedIn ? 'ok' : 'not signed in'],
+    ['Sync errors', session.syncErrors.length ? [...session.syncErrors].reverse().map(e => `${new Date(e.at).toLocaleTimeString('en-GB')} ${e.what}`).join('\n') : 'none'],
     ['Queued writes', session.queue.length ? `${session.queue.length}: ${session.queue.map(q => `${q.kind}${q.tries ? ` ×${q.tries + 1}` : ''}`).join(', ')}` : 'none'],
     ['Pool list source', live.poolSource === 'supabase' ? `Supabase pool_stats, computed ${ago(live.poolStatsAt)}` : live.poolSource === 'client' ? 'computed on this phone (pool_stats missing, stale or unreachable)' : 'not loaded yet'],
     ['Detection', `${diag.detectMethod || 'n/a'} · ${ms(diag.detectMs)}`],

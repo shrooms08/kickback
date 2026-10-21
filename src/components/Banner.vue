@@ -4,7 +4,7 @@ import Icon from './Icon.vue'
 // Problem banner for persistent issues: icon + one line + one action.
 // It pushes the content down (the Stage moves layers below it), never covers it.
 defineProps<{
-  kind: 'offline' | 'stale' | 'pool'
+  kind: 'offline' | 'stale' | 'pool' | 'sync'
   text: string
   label: string
 }>()

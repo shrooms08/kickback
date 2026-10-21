@@ -23,7 +23,8 @@ export function positiveLuna(v: unknown, what = 'amount'): number {
 
 /**
  * A plan: exactly one slice per type, whole percents 0..100 that total 100. A send slice above
- * 0% must name one of the owner's contacts.
+ * 0% must name one of the owner's contacts; a contact link (at any percent) must point at one
+ * of them. Stored exactly as sent: nothing is moved between slices or dropped.
  */
 export function validateSlices(v: unknown, contactIds: ReadonlySet<string>): Slice[] {
   if (!Array.isArray(v) || v.length !== 3) fail('slices must list send, restake and keep')
@@ -33,10 +34,12 @@ export function validateSlices(v: unknown, contactIds: ReadonlySet<string>): Sli
     if (!s) fail(`missing ${type} slice`)
     if (!Number.isInteger(s.percent) || s.percent < 0 || s.percent > 100) fail(`${type} percent must be a whole number 0..100`)
     let contact: string | null = null
-    if (type === 'send' && s.percent > 0) {
-      if (typeof s.contact_id !== 'string' || !contactIds.has(s.contact_id)) fail('send slice needs one of your contacts')
-      contact = s.contact_id
+    if (type === 'send') {
+      if (s.contact_id != null && (typeof s.contact_id !== 'string' || !contactIds.has(s.contact_id))) fail('send slice points at a contact you have not saved')
+      if (s.percent > 0 && s.contact_id == null) fail('send slice needs one of your contacts')
+      contact = s.contact_id ?? null
     }
+    else if (s.contact_id != null) fail(`${type} slice cannot have a contact`)
     out.push({ type, percent: s.percent, contact_id: contact })
   }
   if (out.reduce((a, s) => a + s.percent, 0) !== 100) fail('slices must total 100')
