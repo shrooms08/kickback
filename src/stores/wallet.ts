@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { connectAccount, detectNimiqPay, hasHostContext, isUserRejection, toMessage } from '../services/nimiq'
+import { connectAccount, detectNimiqPay, hasHostContext, isUserRejection, readBalance, toMessage } from '../services/nimiq'
+import { useDiag } from './diag'
 import { MOCK_ADDRESS, MOCK_BALANCE_NIM, MOCK_CONNECT_MS } from '../services/mock'
 import { lunaToNim, nimToLuna } from '../lib/format'
 
@@ -33,8 +34,11 @@ export const useWallet = defineStore('wallet', {
   actions: {
     /** Synchronous first guess, before the router resolves the first screen. */
     primeEnv() {
-      if (mockRequested()) this.env = 'mock'
-      else if (hasHostContext()) this.env = 'nimiqpay'
+      const diag = useDiag()
+      diag.hostContextAtBoot = typeof window !== 'undefined' && !!window.nimiqPay
+      diag.nimiqAtBoot = typeof window !== 'undefined' && !!window.nimiq
+      if (mockRequested()) { this.env = 'mock'; diag.detectMethod = 'mock'; diag.detectMs = 0 }
+      else if (hasHostContext()) { this.env = 'nimiqpay'; diag.detectMethod = 'host context (sync)'; diag.detectMs = 0 }
       else this.env = 'detecting'
     },
     async detect() {
@@ -46,6 +50,23 @@ export const useWallet = defineStore('wallet', {
       this.address = MOCK_ADDRESS
       this.balanceLuna = nimToLuna(MOCK_BALANCE_NIM)
       this.connected = true
+      const diag = useDiag()
+      diag.accounts = [MOCK_ADDRESS]
+      diag.listAccountsMs = 0
+      diag.recordBalance(this.balanceLuna, 0)
+    },
+    /** Diagnostics: read the balance again to see whether Nimiq Pay asks every time. */
+    async rereadBalance() {
+      const diag = useDiag()
+      if (!this.address) return diag.error('getBalance', new Error('Not connected yet.'))
+      diag.busy = true
+      try {
+        if (this.env === 'mock') diag.recordBalance(this.balanceLuna, 0)
+        else this.balanceLuna = await readBalance(this.address)
+        await diag.loadRpc(this.address)
+      }
+      catch { /* recorded in diag */ }
+      finally { diag.busy = false }
     },
     async connect(): Promise<ConnectResult> {
       if (this.env === 'mock') {

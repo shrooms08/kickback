@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-export type SheetKind = 'add' | 'stop' | 'fees' | 'help'
+export type SheetKind = 'add' | 'stop' | 'fees' | 'help' | 'diag'
 export type HelpCtx = 'stake' | 'switch' | 'unstake' | 'run' | 'fees' | 'network' | 'general'
 
 export interface ToastData {
