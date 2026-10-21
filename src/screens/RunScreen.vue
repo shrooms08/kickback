@@ -9,6 +9,7 @@ import type { RunStep } from '../stores/flow'
 import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
+import { useWallet } from '../stores/wallet'
 import { int0, nim2, nimParts } from '../lib/format'
 import { ranksOf, splitCents } from '../lib/plan'
 import { shake } from '../lib/anim'
@@ -18,6 +19,7 @@ const flow = useFlow()
 const a = useAccount()
 const plan = usePlan()
 const ui = useUi()
+const wallet = useWallet()
 
 const review = computed(() => flow.runPhase === 'review')
 const running = computed(() => flow.runPhase === 'running')
@@ -45,6 +47,7 @@ const stack = computed(() => {
 
 const reason = computed(() => {
   if (!review.value) return ''
+  if (wallet.isPreview) return 'Preview is read only'
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
   if (a.readyCents === 0) return 'Nothing to share yet. Your first kickback lands in about 9h.'
   return ''

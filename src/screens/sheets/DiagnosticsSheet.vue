@@ -6,18 +6,54 @@ import { useUi } from '../../stores/ui'
 import { useWallet } from '../../stores/wallet'
 import { useDiag, hostInfo } from '../../stores/diag'
 import { useCopy } from '../../lib/copy'
+import { useLive } from '../../stores/live'
+import { useData } from '../../stores/data'
+import { useAccount } from '../../stores/account'
+import { rpcStats } from '../../services/rpc'
+import { formatAddress, isNimiqAddress } from '../../lib/format'
+import { ago } from '../../lib/time'
+import { shake } from '../../lib/anim'
+import { openLive } from '../../flows'
 
 // Hidden diagnostics: what the SDK and the RPC actually returned.
 const ui = useUi()
 const wallet = useWallet()
 const diag = useDiag()
 const { copied, copy } = useCopy()
+const live = useLive()
+const data = useData()
+const account = useAccount()
 const now = ref(Date.now())
 
 onMounted(() => {
   // RPC lines are fetched after connect; fetch them now if that never ran.
-  if (wallet.address && !diag.stakerRaw && !diag.rpcLoading) diag.loadRpc(wallet.address)
+  if (wallet.effectiveAddress && !diag.stakerRaw && !diag.rpcLoading) diag.loadRpc(wallet.effectiveAddress)
 })
+
+// Preview address: read another address everywhere, read only.
+const previewInput = ref(wallet.previewAddress)
+const previewErr = ref('')
+const inputEl = ref<HTMLInputElement>()
+function applyPreview() {
+  const a = previewInput.value.trim()
+  if (!isNimiqAddress(a)) {
+    previewErr.value = 'That doesn\'t look like a Nimiq address. It starts with NQ and has 36 characters.'
+    shake(inputEl.value)
+    return
+  }
+  previewErr.value = ''
+  wallet.setPreview(a)
+  previewInput.value = formatAddress(a)
+  diag.stakerRaw = ''
+  ui.closeSheet(() => openLive())
+}
+function clearPreview() {
+  previewInput.value = ''
+  previewErr.value = ''
+  wallet.setPreview(null)
+  diag.stakerRaw = ''
+  ui.closeSheet(() => openLive())
+}
 
 const ms = (v: number | null) => v == null ? 'n/a' : `${v} ms`
 
@@ -38,6 +74,8 @@ const lines = computed(() => {
     ['listAccounts count', accounts ? String(accounts.length) : 'not called'],
     ['listAccounts took', ms(diag.listAccountsMs)],
     ['Address (accounts[0])', accounts?.[0] ?? wallet.address ?? 'n/a'],
+    ['Preview address', wallet.previewAddress || 'off'],
+    ['Reading', wallet.effectiveAddress || 'n/a'],
   ]
   if (accounts && accounts.length > 1) accounts.slice(1).forEach((a, i) => out.push([`accounts[${i + 1}]`, a]))
   if (!diag.balanceReads.length) out.push(['getBalance', 'not called'])
@@ -47,7 +85,18 @@ const lines = computed(() => {
     out.push([`getBalance NIM${n}`, r.nim == null ? 'n/a' : `${r.nim} NIM`])
     out.push([`getBalance took${n}`, `${r.ms} ms`])
   })
-  out.push(['RPC', `rpc.nimiqwatch.com · ${ms(diag.rpcMs)}`])
+  out.push(['RPC this session', `${rpcStats.calls} calls · ${rpcStats.units} units · cache hits ${rpcStats.cacheHits} · deduped ${rpcStats.deduped} · retries ${rpcStats.retries} · 429s ${rpcStats.throttled} · queued ${Math.round(rpcStats.waitedMs / 100) / 10}s`])
+  out.push(['RPC by method', Object.entries(rpcStats.byMethod).map(([m, n]) => `${m} ${n}`).join(' · ') || 'none'])
+  if (rpcStats.lastError) out.push(['RPC last error', rpcStats.lastError])
+  if (!wallet.isMock) {
+    out.push(['Live data', `${live.lastOkAt ? `refreshed ${ago(live.lastOkAt)}` : 'not refreshed yet'}${account.stale ? ` · stale (${account.staleMin} min)` : ''}${live.lastError ? ` · error: ${live.lastError}` : ''}`])
+    out.push(['Stake', account.staked ? `${account.stakedNim} NIM active · ${account.inactiveNim} inactive · pool ${account.poolName}${account.notDirect ? ' (not direct)' : ''}` : 'not a staker'])
+    out.push(['Kickbacks found (30 days)', `${data.kickbacks.length} · ready ${account.readyNim} NIM · earned ${account.earnedNim} NIM`])
+    out.push(['Pools shown', data.pools.map(p => `${p.name} ${p.fee} trust ${p.trust} · ${p.lastPaid} · ${p.intervalH ? p.intervalH.toFixed(2) + 'h' : '?'} · ${p.pays}`).join(' | ') || data.poolsState])
+    if (data.poolsNote) out.push(['Pools hidden', data.poolsNote])
+    out.push(['Est. staking reward', data.grossApy != null ? `${(data.grossApy * 100).toFixed(2)}% gross (before pool fee)` : 'n/a'])
+  }
+  out.push(['RPC (raw lines below)', `rpc.nimiqwatch.com · ${ms(diag.rpcMs)}`])
   out.push(['getStakerByAddress', diag.stakerRaw || (diag.rpcLoading ? 'loading…' : 'not called')])
   out.push(['getAccountByAddress', diag.accountRaw || (diag.rpcLoading ? 'loading…' : 'not called')])
   if (!diag.errors.length) out.push(['Errors', 'none'])
@@ -72,6 +121,19 @@ async function again() {
     <h2 class="sheet-h">Diagnostics</h2>
     <button class="kb-icon-btn" aria-label="Close" @click="ui.closeSheet()"><Icon name="close" :size="18" /></button>
   </div>
+  <div class="preview">
+    <label class="kb-eyebrow" for="kb-preview">Preview address</label>
+    <input
+      id="kb-preview" ref="inputEl" v-model="previewInput" class="pin" :class="{ err: previewErr }"
+      placeholder="NQ00 0000 0000 0000 0000 0000 0000 0000 0000" autocomplete="off" autocapitalize="characters" spellcheck="false"
+      @input="previewErr = ''"
+    >
+    <div v-if="previewErr" class="perr">{{ previewErr }}</div>
+    <div class="prow">
+      <button class="kb-btn pbtn apply" @click="applyPreview">Apply</button>
+      <button class="kb-btn pbtn" :disabled="!wallet.previewAddress && !previewInput" @click="clearPreview">Clear</button>
+    </div>
+  </div>
   <div class="lines">
     <div v-for="([k, v], i) in lines" :key="i" class="line"><span class="k">{{ k }}</span><span class="v">{{ v }}</span></div>
   </div>
@@ -90,6 +152,13 @@ async function again() {
 .line + .line { border-top: 1px solid var(--kb-line); }
 .k { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--kb-label); }
 .v { font: 500 12px/1.4 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--kb-text); word-break: break-all; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.preview { display: flex; flex-direction: column; gap: 8px; }
+.pin { height: 52px; border-radius: var(--kb-r-input); border: 1px solid var(--kb-line); background: var(--kb-bg); color: var(--kb-text); padding: 0 14px; font: 600 14px var(--kb-font); letter-spacing: .02em; outline: none; width: 100%; }
+.pin.err { border-color: var(--kb-error); }
+.perr { font-size: 13px; line-height: 1.4; color: var(--kb-error); }
+.prow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pbtn { height: 44px; font-size: 14px; background: transparent; border: 1px solid var(--kb-line); color: var(--kb-text); font-weight: 700; }
+.pbtn.apply { background: var(--kb-lime); color: var(--kb-bg); border-color: var(--kb-lime); }
 .ghost { height: 48px; background: transparent; border: 1px solid var(--kb-line); color: var(--kb-text); font-size: 15px; font-weight: 700; }
 button:disabled { opacity: .6; }
 </style>

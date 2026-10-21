@@ -14,6 +14,9 @@ import { anim, release, settle, track } from '../lib/anim'
 import type { Running } from '../lib/anim'
 import { back } from '../router'
 import { clearTimers, goPools, refreshStale, retryOnline } from '../flows'
+import { useWallet } from '../stores/wallet'
+import { addressShort } from '../lib/format'
+import { now, span } from '../lib/time'
 
 // The Stage moves screens. The router decides which screen is current; the
 // Stage keeps the screens a transition needs mounted at once (current, the
@@ -30,6 +33,7 @@ const ui = useUi()
 const account = useAccount()
 const flow = useFlow()
 const route = useRoute()
+const wallet = useWallet()
 
 const layerEls: Partial<Record<ScreenName, HTMLElement>> = {}
 const dimEls: Partial<Record<ScreenName, HTMLElement>> = {}
@@ -61,11 +65,24 @@ const banner = computed(() => {
   if (!scr) return null
   const noBanner = scr === 'welcome' || scr === 'browser' || scr === 'connecting'
   if (account.offline && !noBanner) return { kind: 'offline' as const, text: 'You\'re offline. Nothing was sent. We\'ll update when you\'re back.', label: 'Retry', act: retryOnline }
-  if (account.stale && isTab(scr)) return { kind: 'stale' as const, text: account.refreshing ? 'Refreshing…' : 'Showing data from 14 min ago', label: account.refreshing ? 'Wait' : 'Refresh', act: refreshStale }
-  if (account.poolDown && (scr === 'home' || scr === 'pool')) return { kind: 'pool' as const, text: `${account.poolName} hasn't paid in 2 days`, label: 'Switch pool', act: goPools }
+  const mins = wallet.isMock ? 14 : account.staleMin
+  if (account.stale && isTab(scr)) return { kind: 'stale' as const, text: account.refreshing ? 'Refreshing…' : `Showing data from ${mins >= 120 ? `${Math.round(mins / 60)}h` : `${mins} min`} ago`, label: account.refreshing ? 'Wait' : 'Refresh', act: refreshStale }
+  if (account.poolDown && (scr === 'home' || scr === 'pool')) {
+    const silent = wallet.isMock || !account.poolLastPaidAt ? '2 days' : span(now.value - account.poolLastPaidAt)
+    return { kind: 'pool' as const, text: `${account.poolName} hasn't paid in ${silent}`, label: 'Switch pool', act: goPools }
+  }
   return null
 })
-const layerTop = computed(() => banner.value ? 'calc(var(--kb-safe-top) + var(--kb-banner-push))' : 'var(--kb-safe-top)')
+// Preview (read-only view of another address): a persistent strip above everything.
+const previewOn = computed(() => wallet.isPreview && !!nav.screen && !['welcome', 'browser', 'connecting'].includes(nav.screen))
+const previewText = computed(() => `Preview: ${addressShort(wallet.previewAddress)} (read only)`)
+const layerTop = computed(() => {
+  const parts = ['var(--kb-safe-top)']
+  if (previewOn.value) parts.push('var(--kb-preview-h)')
+  if (banner.value) parts.push('var(--kb-banner-push)')
+  return parts.length > 1 ? `calc(${parts.join(' + ')})` : parts[0]
+})
+const bannerTop = computed(() => previewOn.value ? 'calc(var(--kb-safe-top) + var(--kb-preview-h) + 4px)' : 'calc(var(--kb-safe-top) + 4px)')
 
 // ---------- layer placement ----------
 function zOf(n: ScreenName): number {
@@ -294,7 +311,8 @@ function modalDown(e: PointerEvent) {
       <div :ref="el => setDim(l.n, el)" class="dim" :style="{ zIndex: l.z + 2, transform: l.tf, borderRadius: l.r, opacity: l.dim }" />
     </template>
 
-    <Banner v-if="banner" :kind="banner.kind" :text="banner.text" :label="banner.label" @act="banner.act()" />
+    <div v-if="previewOn" class="preview" role="status"><span class="pdot" />{{ previewText }}</div>
+    <Banner v-if="banner" :kind="banner.kind" :text="banner.text" :label="banner.label" :style="{ top: bannerTop }" @act="banner.act()" />
 
     <div v-if="chrome" :ref="setChrome" class="chrome" :style="{ zIndex: chrome.z, transform: chrome.tf, borderRadius: chrome.r }">
       <TabBar />
@@ -319,4 +337,10 @@ function modalDown(e: PointerEvent) {
 .edge { position: absolute; top: var(--layer-top); left: 0; bottom: 0; width: 20px; z-index: 45; touch-action: none; }
 .top-cover { position: absolute; top: 0; left: 0; right: 0; height: var(--kb-safe-top); background: var(--kb-bg); z-index: 60; }
 .guard { position: absolute; inset: 0; z-index: 95; }
+.preview {
+  position: absolute; top: var(--kb-safe-top); left: 0; right: 0; height: var(--kb-preview-h); z-index: 61;
+  display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--kb-raised);
+  border-bottom: 1px solid var(--kb-line); font-size: 12px; font-weight: 700; color: var(--kb-text-2); letter-spacing: .02em;
+}
+.pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--kb-second); }
 </style>

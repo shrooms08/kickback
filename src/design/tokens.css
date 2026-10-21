@@ -125,6 +125,7 @@
   --kb-toast-out: 200ms;
   --kb-banner-h: 62px;           /* persistent issue: icon + one line + one action; pushes content down */
   --kb-banner-push: 72px;
+  --kb-preview-h: 28px;          /* read-only preview strip */
 
   /* segmented bar */
   --kb-seg-h-sm: 6px;

@@ -1,15 +1,16 @@
 import { defineStore } from 'pinia'
 import { useWallet } from './wallet'
+import { useData } from './data'
 import {
-  ACCOUNT_EMPTY, ACCOUNT_FULL, ARRIVAL_CENTS, MOCK_LOW_BALANCE_NIM, POOLS, STAKED_NIM,
+  ACCOUNT_EMPTY, ACCOUNT_FULL, ARRIVAL_CENTS, MOCK_LOW_BALANCE_NIM, STAKED_NIM,
 } from '../services/mock'
 import type { PoolId } from '../services/mock'
 
 export type PoolState = 'active' | 'switching' | 'unstaking'
 
 /**
- * The staking account Kickback shows. Phase 1: mock numbers plus every edge
- * state from the prototype. Only the wallet balance is real (inside Nimiq Pay).
+ * The staking account Kickback shows. In mock mode: the prototype's numbers
+ * and edge states. Live: written by the live store from mainnet data.
  */
 export const useAccount = defineStore('account', {
   state: () => ({
@@ -34,21 +35,39 @@ export const useAccount = defineStore('account', {
     poolDown: false,
     stakePending: false,
     offline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
+    // live-only details (mock mode keeps the prototype's fixed strings)
+    /** Stake on its way out (deactivated), NIM. */
+    inactiveNim: 0,
+    /** Staking with a pool that restakes (no separate kickbacks). */
+    notDirect: false,
+    /** Age of the data shown when the last refresh failed, minutes. */
+    staleMin: 0,
+    /** Latest payout of the user's pool (to anyone), ms. */
+    poolLastPaidAt: null as number | null,
+    /** Hours until the first kickback, for stakers with none yet. */
+    firstInH: null as number | null,
+    /** True until the first live data (cache or network) is applied. */
+    liveLoading: false,
+    /** When inactive stake can be withdrawn (ms), and how far along it is (0..1). */
+    unstakeReadyAt: null as number | null,
+    unstakeProgress: 0,
   }),
   getters: {
-    poolName: s => POOLS[s.pool].name,
-    switchToName: s => (s.switchTo ? POOLS[s.switchTo].name : ''),
+    poolName: s => useData().pool(s.pool).name,
+    switchToName: s => (s.switchTo ? useData().pool(s.switchTo).name : ''),
     readyNim: s => s.readyCents / 100,
     earnedNim: s => s.earnedCents / 100,
     /** Spendable wallet balance in NIM. Real when connected inside Nimiq Pay. */
     walletNim(s): number {
       const wallet = useWallet()
       if (wallet.isMock) return s.lowBal ? MOCK_LOW_BALANCE_NIM : wallet.balanceNim
-      return wallet.balanceNim
+      return wallet.effectiveBalanceNim
     },
     unstaking: s => s.poolState === 'unstaking',
     switching: s => s.poolState === 'switching',
     payoutsEmpty: s => s.emptyAcct || s.noPayouts,
+    /** Amount shown on the Unstaking card. */
+    unstakingNim: s => (useWallet().isMock ? s.stakedNim : s.inactiveNim),
   },
   actions: {
     setEmptyAccount(on: boolean) {

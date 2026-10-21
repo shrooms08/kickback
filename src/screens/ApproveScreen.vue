@@ -4,16 +4,17 @@ import Modal from '../components/Modal.vue'
 import Icon from '../components/Icon.vue'
 import { useFlow } from '../stores/flow'
 import { useAccount } from '../stores/account'
-import { POOLS } from '../services/mock'
+import { useData } from '../stores/data'
 import { nim2 } from '../lib/format'
 import { cancelApprove } from '../flows'
 
 // Waiting for the user to approve in Nimiq Pay.
 const flow = useFlow()
 const account = useAccount()
+const data = useData()
 
 const text = computed(() => {
-  const pick = POOLS[flow.poolPick].name
+  const pick = data.pool(flow.poolPick).name
   const n = parseFloat(flow.amount || '0') || 0
   const staked = nim2(account.stakedNim)
   return {

@@ -1,12 +1,11 @@
 import { defineStore } from 'pinia'
 import { NimiqProviderError, getHostNetwork, getHostLanguage } from '@nimiq/mini-app-sdk'
 import { lunaToNim } from '../lib/format'
+import { rpc } from '../services/rpc'
 
 // Diagnostics for testing the real wallet inside Nimiq Pay. Production-safe:
 // it only records what the app already does and shows it in a hidden sheet
 // (tap the K logo in the Home header 5 times within 3 seconds).
-
-export const NIMIQ_RPC = 'https://rpc.nimiqwatch.com'
 
 export interface DiagError { where: string, name: string, type?: string, code?: number | string, message: string, data?: string }
 
@@ -66,24 +65,17 @@ export const useDiag = defineStore('diag', {
         at: new Date().toLocaleTimeString('en-GB'),
       })
     },
+    /** Through the shared RPC client (rate limited, de-duplicated), shown raw. */
     async rpc(method: string, params: unknown[]): Promise<string> {
       try {
-        const res = await fetch(NIMIQ_RPC, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-        })
-        const text = await res.text()
-        try {
-          const json = JSON.parse(text)
-          if (json.error) this.errors.push({ where: `RPC ${method}`, name: 'JsonRpcError', code: json.error.code, message: String(json.error.message), data: json.error.data !== undefined ? safeJson(json.error.data) : undefined })
-        }
-        catch { /* not JSON: shown raw */ }
-        return `HTTP ${res.status} ${text}`
+        const r = await rpc<unknown>(method, params)
+        if (r.value === null && method === 'getStakerByAddress') return 'null (not a staker: the node answered -32603 "No staker with address")'
+        return `result ${safeJson(r.value)}${r.stale ? ' (cached, refresh failed)' : ''}`
       }
       catch (error) {
         this.error(`RPC ${method}`, error)
-        return `failed: ${describeError(method, error).message}`
+        const e = describeError(method, error)
+        return `error ${e.code ?? ''} ${e.message}${e.data ? ` data=${e.data}` : ''}`
       }
     },
     async loadRpc(address: string) {

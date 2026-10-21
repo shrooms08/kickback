@@ -5,7 +5,7 @@ import CopySwap from '../../components/CopySwap.vue'
 import { useUi } from '../../stores/ui'
 import { useFlow } from '../../stores/flow'
 import { useWallet } from '../../stores/wallet'
-import { POOLS } from '../../services/mock'
+import { useData } from '../../stores/data'
 import { addressShort, nim2 } from '../../lib/format'
 import { useCopy } from '../../lib/copy'
 
@@ -13,10 +13,11 @@ import { useCopy } from '../../lib/copy'
 const ui = useUi()
 const flow = useFlow()
 const wallet = useWallet()
+const data = useData()
 const { copied, copy } = useCopy()
 
 const msg = computed(() => {
-  const pick = POOLS[flow.poolPick].name
+  const pick = data.pool(flow.poolPick).name
   const n = parseFloat(flow.amount || '0') || 0
   const failAmt = flow.steps.filter(x => x.st === 'failed').reduce((t, x) => t + x.amt, 0)
   const lines: Record<string, string> = {
@@ -29,7 +30,7 @@ const msg = computed(() => {
     general: 'I have a question about Kickback.',
   }
   const time = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-  const who = wallet.address ? `\nWallet: ${addressShort(wallet.address)}` : ''
+  const who = wallet.effectiveAddress ? `\nWallet: ${addressShort(wallet.effectiveAddress)}${wallet.isPreview ? ' (preview)' : ''}` : ''
   return `Hi Kickback team,\n${lines[ui.helpCtx] || lines.general}${who}\nTime: ${time}`
 })
 

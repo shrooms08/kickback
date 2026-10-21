@@ -5,15 +5,18 @@ import NimAmount from '../components/NimAmount.vue'
 import HatchFill from '../components/HatchFill.vue'
 import { useAccount } from '../stores/account'
 import { useWallet } from '../stores/wallet'
-import { EST_APY, NIM_USD } from '../services/mock'
+import { NIM_USD } from '../services/mock'
+import { useData } from '../stores/data'
 import { aboutUsd, int0 } from '../lib/format'
 import { goPools } from '../flows'
 
 // Home before staking: the real wallet balance (inside Nimiq Pay) and the pitch.
 const account = useAccount()
 const wallet = useWallet()
+const data = useData()
 const bal = computed(() => account.walletNim)
-const monthly = computed(() => Math.round(bal.value * EST_APY / 12))
+// Estimate: network staking reward after the best pool's fee. "about", never a promise.
+const monthly = computed(() => Math.round(bal.value * data.bestApy / 12))
 </script>
 
 <template>

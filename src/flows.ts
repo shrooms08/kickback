@@ -12,8 +12,11 @@ import { usePlan } from './stores/plan'
 import { useUi } from './stores/ui'
 import { useWallet } from './stores/wallet'
 import { useFlow } from './stores/flow'
+import { useLive } from './stores/live'
+import { useData } from './stores/data'
+import { sameAddr } from './services/chain'
 import type { ApproveKind, RunStep } from './stores/flow'
-import { APPROVE_DELAY_MS, DEFAULT_PLAN, NO_CONTACT_PLAN, POOLS } from './services/mock'
+import { APPROVE_DELAY_MS, DEFAULT_PLAN, NO_CONTACT_PLAN } from './services/mock'
 import { nim2 } from './lib/format'
 import { splitCents } from './lib/plan'
 import type { Split } from './lib/plan'
@@ -41,9 +44,12 @@ export async function connectWallet() {
   go('connecting')
   const res = await wallet.connect()
   if (res.ok) {
-    account.staked = false
-    go('homeEmpty')
-    return
+    if (wallet.isMock) {
+      account.staked = false
+      go('homeEmpty')
+      return
+    }
+    return openLive()
   }
   if (res.rejected) {
     go('welcome')
@@ -55,6 +61,29 @@ export async function connectWallet() {
   flow.errorConnect = true
   go('error')
 }
+
+/** Load live data for the effective address (cache first), then show the right Home. */
+export async function openLive() {
+  const flow = useFlow(), account = useAccount()
+  const nav = useNav()
+  if (nav.screen !== 'connecting') go('connecting')
+  const r = await useLive().start()
+  if (r === 'failed') {
+    flow.errorFrom = 'network'
+    flow.errorConnect = false
+    flow.errorLive = true
+    return go('error')
+  }
+  go(account.staked ? 'home' : 'homeEmpty')
+}
+
+/** Preview is read only: money actions explain and stop. Returns true when blocked. */
+export function previewBlocked(): boolean {
+  if (!useWallet().isPreview) return false
+  useUi().showToast(PREVIEW_READ_ONLY)
+  return true
+}
+export const PREVIEW_READ_ONLY = 'Preview is read only'
 
 // ---------- tabs ----------
 
@@ -77,7 +106,12 @@ export function goAddContact() {
 
 export function goPools() {
   const nav = useNav(), account = useAccount(), flow = useFlow()
-  if (account.staked && isTab(nav.screen) && nav.screen !== 'homeEmpty') flow.poolPick = account.pool === 'fun' ? 'obs' : 'fun'
+  const pools = useData().pools
+  if (account.staked && isTab(nav.screen) && nav.screen !== 'homeEmpty') {
+    // Switching: preselect a pool other than the current one.
+    flow.poolPick = pools.find(p => !sameAddr(p.id, account.pool) && p.id !== account.pool)?.id ?? flow.poolPick
+  }
+  else if (!pools.some(p => p.id === flow.poolPick) && pools[0]) flow.poolPick = pools[0].id
   go('pools')
 }
 
@@ -126,6 +160,7 @@ export function closeRun() {
 /** Hold to run my plan. Real transactions arrive in phase 3. */
 export function holdRunDone() {
   const account = useAccount(), ui = useUi()
+  if (previewBlocked()) return
   if (account.lowFees) return ui.openSheet('fees')
   ui.comingSoon()
 }
@@ -228,7 +263,7 @@ export function resolveApprove() {
   const r = flow.walletResp, k = flow.approveKind
   const backTo: ScreenName = flow.approveFrom && flow.approveFrom !== 'approve' ? flow.approveFrom : 'pool'
   flow.walletResp = 'approve'
-  const pick = POOLS[flow.poolPick].name
+  const pick = useData().pool(flow.poolPick).name
   const fail = (from: 'stake' | 'switch' | 'unstake') => { flow.errorFrom = from; flow.errorConnect = false; go('error') }
   if (k === 'stake') {
     if (r === 'approve') { account.$patch({ staked: true, pool: flow.poolPick, poolState: 'active' }); go('success') }
@@ -268,6 +303,7 @@ export function successHome() {
 export function retryError() {
   const flow = useFlow()
   if (flow.errorConnect) { flow.errorConnect = false; flow.errorFrom = null; return connectWallet() }
+  if (flow.errorLive) { flow.errorLive = false; flow.errorFrom = null; return openLive() }
   const k = flow.errorFrom
   flow.errorFrom = null
   if (k === 'stake') return go('stake')
@@ -316,13 +352,14 @@ export function addContact(name: string) {
 
 // ---------- money actions (phase 3) ----------
 
-export function holdStakeDone() { useUi().comingSoon() }
+export function holdStakeDone() { if (!previewBlocked()) useUi().comingSoon() }
 
 export function poolsContinue() {
   const nav = useNav(), account = useAccount(), flow = useFlow(), ui = useUi()
   const switchMode = account.staked && isTab(nav.poolsFrom) && nav.poolsFrom !== 'homeEmpty'
   if (!switchMode) return go('stake')
   if (flow.poolPick === account.pool) return ui.showToast(`You're already staked with ${account.poolName}. Pick the other pool to switch.`)
+  if (previewBlocked()) return
   ui.comingSoon()
 }
 
@@ -334,10 +371,10 @@ export function switchPool() {
 
 export function confirmStop() {
   const ui = useUi()
-  ui.closeSheet(() => ui.comingSoon())
+  ui.closeSheet(() => { if (!previewBlocked()) ui.comingSoon() })
 }
 
-export function undoUnstake() { useUi().comingSoon() }
+export function undoUnstake() { if (!previewBlocked()) useUi().comingSoon() }
 
 export function keepInstead() {
   const account = useAccount(), ui = useUi()
@@ -366,6 +403,10 @@ export function retryOnline() {
 
 export function refreshStale() {
   const account = useAccount(), ui = useUi()
+  if (!useWallet().isMock) {
+    useLive().refresh().then(() => { if (!account.stale) ui.showToast('Up to date.') })
+    return
+  }
   if (account.refreshing) return
   account.refreshing = true
   setTimeout(() => { account.$patch({ stale: false, refreshing: false }); ui.showToast('Up to date.') }, 900)

@@ -1,39 +1,55 @@
 // Fake data for phase 1. Every number here matches the prototype
 // (design/Kickback Prototype.html) so screens can be compared side by side.
 
-export type PoolId = 'fun' | 'obs'
+/** Mock pools use 'fun' / 'obs'; live pools use the validator address. */
+export type PoolId = string
 
 export interface Pool {
   id: PoolId
   name: string
-  /** Validator address from the research spike (SPIKE_REPORT.md). */
+  /** Validator address (delegation target). */
   validator: string
+  /** Payout (reward) address, live only. */
+  reward?: string
   fee: string
+  /** 0..1 */
+  feeRate: number
   pays: string
   trust: number
   badge?: string
   lastPaid: string
+  lastPaidAt?: number | null
+  intervalH?: number | null
+  payoutType: string
+  /** Estimated yearly reward after the pool fee, 0..1. */
+  apyNet?: number | null
 }
 
-export const POOLS: Record<PoolId, Pool> = {
+export const POOLS: Record<string, Pool> = {
   fun: {
     id: 'fun',
     name: 'Nimiq.Fun',
     validator: 'NQ32 1U9X 7P3X B2H5 XA00 5LC2 5KFE VBQE X3BU',
     fee: '2.5%',
+    feeRate: 0.025,
     pays: 'About every 12h',
     trust: 9,
     badge: 'Lowest fee',
     lastPaid: 'Last paid 4h ago',
+    payoutType: 'direct',
+    apyNet: 0.09,
   },
   obs: {
     id: 'obs',
     name: 'ObsidianStake',
     validator: 'NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV',
     fee: '5%',
+    feeRate: 0.05,
     pays: '00:00 and 12:00 UTC',
     trust: 8,
     lastPaid: 'Last paid 4h ago',
+    payoutType: 'direct',
+    apyNet: 0.09,
   },
 }
 
@@ -94,7 +110,8 @@ export const CHART = [6.04, 6.06, 6.05, 6.08, 6.07, 6.10, 6.09, 6.12, 6.11, 6.14
 export const CHART_GHOST = [44, 58, 50, 66, 54, 70, 60, 76, 64, 80, 68, 84, 72, 88]
 export const CHART_LABELS = ['Oct 8', 'Oct 14', 'Today']
 
-export interface FeedRow { time: string, amt: number, waiting: boolean }
+/** waiting: true = ready to share, false = already in a plan run, null = no tag (live, before Phase 3). */
+export interface FeedRow { time: string, amt: number, waiting: boolean | null }
 export interface FeedGroup { day: string, rows: FeedRow[] }
 
 export const FEED: FeedGroup[] = [

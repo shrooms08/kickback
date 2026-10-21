@@ -10,7 +10,7 @@ import { useUi } from '../stores/ui'
 // Home header: K tile + wordmark, and the wallet address chip (tap to copy).
 const wallet = useWallet()
 const { copied, copy } = useCopy()
-const chip = computed(() => addressChip(wallet.address))
+const chip = computed(() => addressChip(wallet.effectiveAddress))
 
 // Hidden: 5 taps on the K logo within 3 seconds opens Diagnostics.
 const ui = useUi()
@@ -28,7 +28,7 @@ function logoTap() {
 <template>
   <div class="header">
     <div class="brand"><span class="logo-tap" @click="logoTap"><KLogo tile :size="34" /></span><span class="word">Kickback</span></div>
-    <button class="chip kb-press" aria-label="Copy wallet address" @click="copy('addr', wallet.address)">
+    <button class="chip kb-press" aria-label="Copy wallet address" @click="copy('addr', wallet.effectiveAddress)">
       <span class="kb-dot" />{{ chip }}<CopySwap :copied="copied === 'addr'" />
     </button>
   </div>

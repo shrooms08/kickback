@@ -113,6 +113,5 @@ export async function connectAccount(): Promise<ConnectedAccount> {
   const address = accounts[0]
   if (!address) throw new Error('No Nimiq account available.')
   const balanceLuna = await readBalance(address)
-  diag.loadRpc(address)
   return { address, balanceLuna, balanceNim: lunaToNim(balanceLuna) }
 }

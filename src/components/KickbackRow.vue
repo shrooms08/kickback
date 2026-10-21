@@ -2,15 +2,16 @@
 import Icon from './Icon.vue'
 import { nim2 } from '../lib/format'
 
-// One kickback in a list: "+3.12 NIM", where it came from, and its tag.
-defineProps<{ amt: number, sub: string, waiting: boolean }>()
+// One kickback in a list: "+3.12 NIM", where it came from, and its tag
+// (Waiting / In plan; no tag when waiting is null).
+defineProps<{ amt: number, sub: string, waiting: boolean | null }>()
 </script>
 
 <template>
   <div class="kb-row">
     <div class="ico"><Icon name="kickback" :size="18" :stroke="2.2" /></div>
     <div class="txt"><div class="amt kb-num">+{{ nim2(amt) }} NIM</div><div class="sub">{{ sub }}</div></div>
-    <span class="tag" :class="{ plan: !waiting }">{{ waiting ? 'Waiting' : 'In plan' }}</span>
+    <span v-if="waiting !== null" class="tag" :class="{ plan: !waiting }">{{ waiting ? 'Waiting' : 'In plan' }}</span>
   </div>
 </template>
 

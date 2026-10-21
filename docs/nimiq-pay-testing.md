@@ -22,3 +22,12 @@ On the Home screen, tap the **K logo** 5 times within 3 seconds. The sheet shows
 objects exist, detection and call timings, the raw `listAccounts` / `getBalance` results, staker and account info
 from `rpc.nimiqwatch.com`, and every error with its name, type, code and message. "Run getBalance again" calls it a
 second time. "Copy all" copies everything as text.
+
+## Preview another address (read only)
+
+Diagnostics → **Preview address** → paste an address → **Apply**. The whole app reads that address (balance from
+RPC `getAccountByAddress`), a "Preview: NQ.. … (read only)" strip stays at the top, and every money action says
+"Preview is read only". It survives restarts until you tap **Clear**. Test addresses are in `docs/data-notes.md`.
+
+Dev only: `http://localhost:5173/?preview=NQ03J45B27LTQHD72PRM73QPSB15LM6HVCR8` reads an address with live data in a
+desktop browser without Nimiq Pay. Production builds ignore it.

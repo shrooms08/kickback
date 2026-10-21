@@ -5,7 +5,9 @@ import HoldButton from '../components/HoldButton.vue'
 import Icon from '../components/Icon.vue'
 import { useFlow } from '../stores/flow'
 import { useAccount } from '../stores/account'
-import { EST_APY, KICKBACKS_PER_YEAR, MIN_STAKE_NIM, NIM_USD, POOLS } from '../services/mock'
+import { MIN_STAKE_NIM, NIM_USD } from '../services/mock'
+import { useData } from '../stores/data'
+import { useWallet } from '../stores/wallet'
 import { int0, nim2 } from '../lib/format'
 import { shake } from '../lib/anim'
 import { back } from '../router'
@@ -13,6 +15,8 @@ import { holdStakeDone } from '../flows'
 
 const flow = useFlow()
 const account = useAccount()
+const data = useData()
+const wallet = useWallet()
 const amountEl = ref<HTMLElement>()
 
 const bal = computed(() => account.walletNim)
@@ -24,6 +28,7 @@ const amtSize = computed(() => amtInt.value.length > 7 ? 46 : amtInt.value.lengt
 const bad = computed(() => n.value > 0 && (n.value < MIN_STAKE_NIM || n.value > bal.value || bal.value < MIN_STAKE_NIM))
 
 const reason = computed(() => {
+  if (wallet.isPreview) return 'Preview is read only'
   if (account.offline) return 'You\'re offline. Reconnect to stake.'
   if (bal.value < MIN_STAKE_NIM) return `You have ${nim2(bal.value)} NIM. The minimum is 100 NIM.`
   if (n.value === 0) return 'Enter how much NIM to stake.'
@@ -34,7 +39,10 @@ const reason = computed(() => {
 
 const projection = computed(() => {
   if (n.value <= 0) return 'Enter an amount to see about how much you could earn.'
-  const perKb = n.value * EST_APY / KICKBACKS_PER_YEAR, month = n.value * EST_APY / 12
+  // Estimated: network staking reward after the pool fee, spread over the pool's payout rhythm.
+  const apy = data.apyFor(flow.poolPick)
+  const perYear = 365 * 24 / (data.pool(flow.poolPick).intervalH || 12)
+  const perKb = n.value * apy / perYear, month = n.value * apy / 12
   return `About ${nim2(perKb)} NIM per kickback, about ${int0(Math.round(month))} NIM a month.`
 })
 
@@ -68,13 +76,13 @@ function press(k: string) {
 <template>
   <div class="kb-scroll">
     <div class="kb-page-push" style="gap: 14px; padding-bottom: calc(20px + var(--kb-safe-bottom))">
-      <StepHeader :step="2" label="Step 2 of 2" :title="`Stake with ${POOLS[flow.poolPick].name}`" @back="back('pools')" />
+      <StepHeader :step="2" label="Step 2 of 2" :title="`Stake with ${data.pool(flow.poolPick).name}`" @back="back('pools')" />
       <div class="amount">
         <div ref="amountEl" class="amt-row">
           <span class="amt kb-num" :class="{ bad }" :style="{ fontSize: amtSize + 'px' }">{{ amtInt }}<span class="dec">{{ amtDec }}</span></span>
           <span class="unit">NIM</span>
         </div>
-        <div class="sub">about ${{ nim2(n * NIM_USD) }}</div>
+        <div v-if="data.isMock" class="sub">about ${{ nim2(n * NIM_USD) }}</div>
         <div class="sub">Balance {{ nim2(bal) }} NIM · Minimum 100 NIM</div>
       </div>
       <div class="chips">

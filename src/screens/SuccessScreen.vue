@@ -5,11 +5,12 @@ import KLogo from '../components/KLogo.vue'
 import Icon from '../components/Icon.vue'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { useFlow } from '../stores/flow'
-import { POOLS } from '../services/mock'
+import { useData } from '../stores/data'
 import { int0 } from '../lib/format'
 import { successHome } from '../flows'
 
 const flow = useFlow()
+const data = useData()
 const amount = computed(() => int0(Math.floor(parseFloat(flow.amount || '0') || 0)))
 </script>
 
@@ -24,7 +25,7 @@ const amount = computed(() => int0(Math.floor(parseFloat(flow.amount || '0') || 
       </div>
       <div class="copy">
         <h1 class="title">You're earning</h1>
-        <p class="lead">{{ amount }}.00 NIM is staked with {{ POOLS[flow.poolPick].name }}. It stays yours.</p>
+        <p class="lead">{{ amount }}.00 NIM is staked with {{ data.pool(flow.poolPick).name }}. It stays yours.</p>
       </div>
     </div>
     <div class="next">

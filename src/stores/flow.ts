@@ -26,6 +26,8 @@ export const useFlow = defineStore('flow', {
     errorFrom: null as ErrorFrom | null,
     /** Error came from Connect wallet: Retry runs the connection again. */
     errorConnect: false,
+    /** Error came from loading live data: Retry loads it again. */
+    errorLive: false,
     /** Dev-only: what the simulated Nimiq Pay answers next. */
     walletResp: 'approve' as WalletResponse,
     runPhase: 'review' as 'review' | 'running' | 'done',

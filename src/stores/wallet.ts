@@ -2,15 +2,18 @@ import { defineStore } from 'pinia'
 import { connectAccount, detectNimiqPay, hasHostContext, isUserRejection, readBalance, toMessage } from '../services/nimiq'
 import { useDiag } from './diag'
 import { MOCK_ADDRESS, MOCK_BALANCE_NIM, MOCK_CONNECT_MS } from '../services/mock'
-import { lunaToNim, nimToLuna } from '../lib/format'
+import { isNimiqAddress, lunaToNim, nimToLuna } from '../lib/format'
+import { prefGet, prefSet } from '../lib/cache'
+import { spaced } from '../services/chain'
 
 /**
- * detecting: waiting to see if Nimiq Pay injects the provider
- * nimiqpay:  running inside Nimiq Pay
- * browser:   a normal browser, show "Open Kickback inside Nimiq Pay"
- * mock:      dev only (?mock=1), fake wallet
+ * detecting:  waiting to see if Nimiq Pay injects the provider
+ * nimiqpay:   running inside Nimiq Pay
+ * browser:    a normal browser, show "Open Kickback inside Nimiq Pay"
+ * mock:       dev only (?mock=1), fake wallet and mock data
+ * devpreview: dev only (?preview=NQ..), live data for an address without Nimiq Pay
  */
-export type WalletEnv = 'detecting' | 'nimiqpay' | 'browser' | 'mock'
+export type WalletEnv = 'detecting' | 'nimiqpay' | 'browser' | 'mock' | 'devpreview'
 
 export type ConnectResult = { ok: true } | { ok: false, rejected: boolean, message: string }
 
@@ -20,16 +23,31 @@ export function mockRequested(): boolean {
   return new URLSearchParams(window.location.search).get('mock') === '1'
 }
 
+/** ?preview=NQ.. (dev builds only): read an address with live data in a desktop browser. */
+export function devPreviewRequested(): string | null {
+  if (!import.meta.env.DEV) return null
+  const a = new URLSearchParams(window.location.search).get('preview')
+  return a && isNimiqAddress(a) ? spaced(a) : null
+}
+
 export const useWallet = defineStore('wallet', {
   state: () => ({
     env: 'detecting' as WalletEnv,
     connected: false,
     address: '',
     balanceLuna: 0,
+    /** Read-only preview of another address (Diagnostics). Persisted until cleared. */
+    previewAddress: (prefGet('preview') || '') as string,
+    /** Balance of the preview address, from RPC getAccountByAddress. */
+    previewBalanceLuna: 0,
   }),
   getters: {
     isMock: s => s.env === 'mock',
+    isPreview: s => !!s.previewAddress,
     balanceNim: s => lunaToNim(s.balanceLuna),
+    /** The address every screen reads: the preview address if set, else the wallet. */
+    effectiveAddress: s => s.previewAddress || s.address,
+    effectiveBalanceNim: s => lunaToNim(s.previewAddress ? s.previewBalanceLuna : s.balanceLuna),
   },
   actions: {
     /** Synchronous first guess, before the router resolves the first screen. */
@@ -37,7 +55,9 @@ export const useWallet = defineStore('wallet', {
       const diag = useDiag()
       diag.hostContextAtBoot = typeof window !== 'undefined' && !!window.nimiqPay
       diag.nimiqAtBoot = typeof window !== 'undefined' && !!window.nimiq
-      if (mockRequested()) { this.env = 'mock'; diag.detectMethod = 'mock'; diag.detectMs = 0 }
+      const devPreview = devPreviewRequested()
+      if (mockRequested()) { this.env = 'mock'; this.previewAddress = ''; diag.detectMethod = 'mock'; diag.detectMs = 0 }
+      else if (devPreview) { this.env = 'devpreview'; this.previewAddress = devPreview; this.address = devPreview; this.connected = true }
       else if (hasHostContext()) { this.env = 'nimiqpay'; diag.detectMethod = 'host context (sync)'; diag.detectMs = 0 }
       else this.env = 'detecting'
     },
@@ -45,6 +65,11 @@ export const useWallet = defineStore('wallet', {
       if (this.env !== 'detecting') return this.env
       this.env = (await detectNimiqPay()) ? 'nimiqpay' : 'browser'
       return this.env
+    },
+    setPreview(address: string | null) {
+      this.previewAddress = address ? spaced(address) : (this.env === 'devpreview' ? this.address : '')
+      this.previewBalanceLuna = 0
+      prefSet('preview', address ? this.previewAddress : null)
     },
     useMockAccount() {
       this.address = MOCK_ADDRESS
@@ -55,6 +80,12 @@ export const useWallet = defineStore('wallet', {
       diag.listAccountsMs = 0
       diag.recordBalance(this.balanceLuna, 0)
     },
+    /** Wallet balance through the SDK (not in preview, where the live store reads it over RPC). */
+    async refreshWalletBalance() {
+      if (this.env !== 'nimiqpay' || !this.address) return
+      try { this.balanceLuna = await readBalance(this.address) }
+      catch { /* recorded in diag; keep the last value */ }
+    },
     /** Diagnostics: read the balance again to see whether Nimiq Pay asks every time. */
     async rereadBalance() {
       const diag = useDiag()
@@ -62,8 +93,8 @@ export const useWallet = defineStore('wallet', {
       diag.busy = true
       try {
         if (this.env === 'mock') diag.recordBalance(this.balanceLuna, 0)
-        else this.balanceLuna = await readBalance(this.address)
-        await diag.loadRpc(this.address)
+        else if (this.env === 'nimiqpay') this.balanceLuna = await readBalance(this.address)
+        await diag.loadRpc(this.effectiveAddress)
       }
       catch { /* recorded in diag */ }
       finally { diag.busy = false }
@@ -72,6 +103,10 @@ export const useWallet = defineStore('wallet', {
       if (this.env === 'mock') {
         await new Promise(r => setTimeout(r, MOCK_CONNECT_MS))
         this.useMockAccount()
+        return { ok: true }
+      }
+      if (this.env === 'devpreview') {
+        this.connected = true
         return { ok: true }
       }
       try {

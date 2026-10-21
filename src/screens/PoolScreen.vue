@@ -1,20 +1,37 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import SegmentedBar from '../components/SegmentedBar.vue'
+import NotDirectNotice from '../components/NotDirectNotice.vue'
+import UnstakingCard from '../components/UnstakingCard.vue'
 import { useAccount } from '../stores/account'
 import { useUi } from '../stores/ui'
-import { PAYOUTS, POOLS } from '../services/mock'
-import { int0, nim2 } from '../lib/format'
-import { switchPool, undoUnstake } from '../flows'
+import { useData } from '../stores/data'
+import { nim2, nimParts } from '../lib/format'
+import { ago, now } from '../lib/time'
+import { goPools, switchPool } from '../flows'
 
 const a = useAccount()
 const ui = useUi()
-const pool = computed(() => POOLS[a.pool])
+const data = useData()
+const live = computed(() => !data.isMock)
+const pool = computed(() => data.pool(a.pool))
+const stakedParts = computed(() => nimParts(a.stakedNim))
+const noPayouts = computed(() => live.value ? data.payouts.length === 0 : a.payoutsEmpty)
 const status = computed(() => a.unstaking ? 'Unstaking' : a.switching ? 'Switching' : a.poolDown ? 'Not paying' : 'Active')
 const dot = computed(() => a.poolDown ? 'var(--kb-error)' : a.unstaking ? 'var(--kb-text-2)' : 'var(--kb-lime)')
 const line = computed(() => {
-  const paid = a.poolDown ? 'Last paid 2 days ago' : a.late ? 'Last paid 14h ago' : a.payoutsEmpty ? 'No kickbacks to you yet' : 'Last paid 4h ago'
+  let paid: string
+  if (live.value) {
+    void now.value
+    paid = a.notDirect ? 'Rewards are added to your stake' : !data.payouts.length ? 'No kickbacks to you yet' : a.poolLastPaidAt ? `Last paid ${ago(a.poolLastPaidAt)}` : 'Checking payouts…'
+  }
+  else paid = a.poolDown ? 'Last paid 2 days ago' : a.late ? 'Last paid 14h ago' : a.payoutsEmpty ? 'No kickbacks to you yet' : 'Last paid 4h ago'
   return `${paid} · Your ${nim2(a.stakedNim)} NIM stays staked in your name.`
+})
+const othersLine = computed(() => {
+  if (!live.value) return 'The pool paid 38 other stakers 2h ago.'
+  void now.value
+  return a.poolLastPaidAt ? `The pool paid its stakers ${ago(a.poolLastPaidAt)}.` : 'Kickbacks show up here after the pool pays out.'
 })
 </script>
 
@@ -23,15 +40,23 @@ const line = computed(() => {
     <div class="kb-page">
       <div class="head"><span class="kb-eyebrow" style="font-size: 13px">Staking</span></div>
       <h1 class="kb-h1">Your pool</h1>
+      <div v-if="live && !a.staked" class="state">
+        <div class="kb-eyebrow">Not staking yet</div>
+        <div class="big">Pick a pool to start earning.</div>
+        <div class="small">Your NIM stays yours. The pool pays you about every 12 hours.</div>
+        <button class="kb-btn kb-btn-primary" @click="goPools">Choose a pool</button>
+      </div>
+      <template v-else>
+      <NotDirectNotice v-if="a.notDirect" />
       <div class="pool">
         <div class="row">
           <div class="name">{{ pool.name }}</div>
           <div class="status"><span class="sdot" :style="{ background: dot }" />{{ status }}</div>
         </div>
         <div class="stats">
-          <div><div class="kb-eyebrow s11">Staked</div><div class="v kb-num" style="color: var(--kb-numc)">{{ int0(a.stakedNim) }}<span class="kb-dim">.00</span></div></div>
-          <div><div class="kb-eyebrow s11">Fee</div><div class="v">{{ pool.fee }}</div></div>
-          <div><div class="kb-eyebrow s11">Trust</div><div class="v">{{ pool.trust }} / 10</div></div>
+          <div><div class="kb-eyebrow s11">Staked</div><div class="v kb-num" style="color: var(--kb-numc)">{{ stakedParts[0] }}<span class="kb-dim">{{ stakedParts[1] }}</span></div></div>
+          <div><div class="kb-eyebrow s11">Fee</div><div class="v">{{ pool.fee || '—' }}</div></div>
+          <div><div class="kb-eyebrow s11">Trust</div><div class="v">{{ pool.trust ? `${pool.trust} / 10` : '—' }}</div></div>
         </div>
         <SegmentedBar :segments="10" :value="pool.trust" size="lg" />
         <div class="line">{{ line }}</div>
@@ -42,23 +67,17 @@ const line = computed(() => {
         <SegmentedBar :segments="2" :value="1" size="lg" pulse />
         <div class="body15">Moving to {{ a.switchToName }}. Your NIM keeps earning with {{ a.poolName }} until the switch takes effect at the next epoch.</div>
       </div>
-      <div v-if="a.unstaking" class="state">
-        <div class="row"><div class="kb-eyebrow">Unstaking</div><span class="meta">About 2 days left</span></div>
-        <div class="big">Your {{ nim2(a.stakedNim) }} NIM is on its way back.</div>
-        <SegmentedBar :segments="8" :value="1" size="lg" pulse />
-        <div class="small">Available in about 2 days. Nothing else to do.</div>
-        <button class="kb-btn ghost48" @click="undoUnstake">Undo: keep earning</button>
-      </div>
+      <UnstakingCard v-if="a.unstaking" />
 
       <div class="col10">
         <div class="kb-eyebrow">Last 10 kickbacks</div>
         <div class="list">
-          <div v-if="a.payoutsEmpty" class="empty">
+          <div v-if="noPayouts" class="empty">
             <div class="empty-t">No kickbacks to you yet.</div>
-            <div class="empty-s"><span class="kb-dot" />The pool paid 38 other stakers 2h ago.</div>
+            <div class="empty-s"><span class="kb-dot" />{{ othersLine }}</div>
           </div>
           <template v-else>
-            <div v-for="p in PAYOUTS" :key="p.when" class="payout"><span class="kb-dim">{{ p.when }}</span><span class="amt kb-num">+{{ nim2(p.amt) }} NIM</span></div>
+            <div v-for="p in data.payouts" :key="p.when" class="payout"><span class="kb-dim">{{ p.when }}</span><span class="amt kb-num">+{{ nim2(p.amt) }} NIM</span></div>
           </template>
         </div>
       </div>
@@ -67,6 +86,7 @@ const line = computed(() => {
         <button class="kb-btn kb-btn-ghost" style="font-size: 15px" @click="switchPool">Switch pool</button>
         <button class="kb-btn kb-btn-danger" style="height: 56px; font-size: 15px" @click="ui.openSheet('stop')">Stop earning</button>
       </div>
+      </template>
     </div>
   </div>
 </template>
