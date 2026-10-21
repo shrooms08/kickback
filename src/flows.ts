@@ -15,6 +15,11 @@ import { useFlow } from './stores/flow'
 import { useLive } from './stores/live'
 import { useData } from './stores/data'
 import { sameAddr } from './services/chain'
+import {
+  clearFinished, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
+} from './money'
+
+const isLive = () => !useWallet().isMock
 import type { ApproveKind, RunStep } from './stores/flow'
 import { APPROVE_DELAY_MS, DEFAULT_PLAN, NO_CONTACT_PLAN } from './services/mock'
 import { nim2 } from './lib/format'
@@ -68,6 +73,7 @@ export async function openLive() {
   const nav = useNav()
   if (nav.screen !== 'connecting') go('connecting')
   const r = await useLive().start()
+  restoreRun()
   if (r === 'failed') {
     flow.errorFrom = 'network'
     flow.errorConnect = false
@@ -77,12 +83,7 @@ export async function openLive() {
   go(account.staked ? 'home' : 'homeEmpty')
 }
 
-/** Preview is read only: money actions explain and stop. Returns true when blocked. */
-export function previewBlocked(): boolean {
-  if (!useWallet().isPreview) return false
-  useUi().showToast(PREVIEW_READ_ONLY)
-  return true
-}
+export { previewBlocked } from './money'
 export const PREVIEW_READ_ONLY = 'Preview is read only'
 
 // ---------- tabs ----------
@@ -143,7 +144,11 @@ export function buildSteps(): RunStep[] {
 export function goRun() {
   const flow = useFlow()
   clearTimers()
-  flow.$patch({ doneMode: 'full', runPhase: 'review', steps: buildSteps() })
+  if (isLive()) {
+    // A run in progress (or just finished) is shown as it is; otherwise a fresh review.
+    if (flow.runPhase !== 'running' && flow.runPhase !== 'done') reviewRun()
+  }
+  else flow.$patch({ doneMode: 'full', runPhase: 'review', steps: buildSteps() })
   go('run')
 }
 
@@ -154,15 +159,16 @@ export function changePlanFromRun() {
 
 export function closeRun() {
   clearTimers()
+  if (isLive()) clearFinished()
   back(useAccount().staked ? 'home' : 'homeEmpty')
 }
 
-/** Hold to run my plan. Real transactions arrive in phase 3. */
+/** Hold to run my plan. */
 export function holdRunDone() {
   const account = useAccount(), ui = useUi()
-  if (previewBlocked()) return
+  if (isLive()) return runPlanLive()
   if (account.lowFees) return ui.openSheet('fees')
-  ui.comingSoon()
+  simulateRun()
 }
 
 /** Dev: walk through each step with simulated Nimiq Pay answers. */
@@ -200,7 +206,7 @@ export function process(i: number) {
     if (!st.auto && account.offline) r = 'fail'
     if (r === 'approve') {
       setStep(i, 'approved')
-      if (!st.auto && st.type !== 'keep') fxStep(st.type)
+      if (!st.auto && (st.type === 'send' || st.type === 'restake')) fxStep(st.type)
       next()
     }
     else if (r === 'reject') {
@@ -218,6 +224,7 @@ function finishRun() {
 }
 
 export function retryFailed() {
+  if (isLive()) return retryRunLive()
   const flow = useFlow()
   const i = flow.steps.findIndex(x => x.st === 'failed')
   if (i < 0) return
@@ -290,6 +297,7 @@ export function resolveApprove() {
 /** "Set up my plan" on Success. */
 export function successHome() {
   const account = useAccount(), ui = useUi()
+  if (isLive()) return go('home')
   go('home')
   account.stakePending = true
   setTimeout(() => {
@@ -306,6 +314,7 @@ export function retryError() {
   if (flow.errorLive) { flow.errorLive = false; flow.errorFrom = null; return openLive() }
   const k = flow.errorFrom
   flow.errorFrom = null
+  if (k === 'notSent' || k === 'chainFailed') return go(flow.errorBack ?? 'pool')
   if (k === 'stake') return go('stake')
   if (k === 'switch' || k === 'unstake') return go('pool')
   go('connecting')
@@ -340,11 +349,11 @@ export function removeRecipient() {
   ui.showToast(`Removed ${rec.name} from your plan`, { undo: true, fn: () => plan.$patch(prev) })
 }
 
-export function addContact(name: string) {
+export function addContact(name: string, address?: string) {
   const plan = usePlan(), ui = useUi(), nav = useNav()
   const first = !plan.contacts.length
   ui.closeSheet(() => {
-    const id = plan.addContact(name)
+    const id = plan.addContact(name, address)
     if (first) plan.pct = [40, 30, 30]
     ui.showToast(`${name} added`, { action: 'View', fn: () => { plan.recipient = id; if (nav.screen !== 'plan') goPlan() } })
   })
@@ -352,15 +361,19 @@ export function addContact(name: string) {
 
 // ---------- money actions (phase 3) ----------
 
-export function holdStakeDone() { if (!previewBlocked()) useUi().comingSoon() }
+export function holdStakeDone() {
+  if (isLive()) return stakeLive()
+  startApprove('stake')
+}
 
 export function poolsContinue() {
   const nav = useNav(), account = useAccount(), flow = useFlow(), ui = useUi()
   const switchMode = account.staked && isTab(nav.poolsFrom) && nav.poolsFrom !== 'homeEmpty'
   if (!switchMode) return go('stake')
-  if (flow.poolPick === account.pool) return ui.showToast(`You're already staked with ${account.poolName}. Pick the other pool to switch.`)
-  if (previewBlocked()) return
-  ui.comingSoon()
+  const same = flow.poolPick === account.pool || sameAddr(flow.poolPick, account.pool)
+  if (isLive()) return same ? go('stake') : switchLive() // same pool: Add to stake
+  if (same) return ui.showToast(`You're already staked with ${account.poolName}. Pick the other pool to switch.`)
+  startApprove('switch')
 }
 
 export function switchPool() {
@@ -371,14 +384,31 @@ export function switchPool() {
 
 export function confirmStop() {
   const ui = useUi()
-  ui.closeSheet(() => { if (!previewBlocked()) ui.comingSoon() })
+  ui.closeSheet(() => { if (isLive()) stopLive(); else startApprove('unstake') })
 }
 
-export function undoUnstake() { if (!previewBlocked()) useUi().comingSoon() }
+export function undoUnstake() {
+  if (isLive()) return undoLive()
+  startApprove('keep')
+}
+
+export function withdraw() {
+  if (isLive()) return openWithdraw()
+  useUi().showToast('Withdraw works with live data.')
+}
 
 export function keepInstead() {
   const account = useAccount(), ui = useUi()
   const prev = account.readyCents, pw = account.waiting
+  if (isLive()) {
+    // Keeping needs no transaction: mark what's ready as handled.
+    const plan = usePlan(), luna = account.readyLuna
+    return ui.closeSheet(() => {
+      plan.recordShared(luna)
+      go('home')
+      ui.showToast(`${nim2(luna / 1e5)} NIM kept in your wallet.`, { undo: true, fn: () => { plan.ledger = plan.ledger.slice(0, -1) } })
+    })
+  }
   ui.closeSheet(() => {
     account.$patch({ readyCents: 0, readyFrom: 0, waiting: 0, lowFees: false })
     go('home')
@@ -388,6 +418,8 @@ export function keepInstead() {
 
 export function shareNow() {
   const account = useAccount(), ui = useUi()
+  if (isLive() && usePlan().planStartedAt == null) { ui.showToast('Save your plan first. Kickbacks after that are shared with it.'); return goPlan() }
+  if (isLive() && useFlow().runPhase === 'running') return goRun()
   if (account.readyCents) goRun()
   else ui.showToast('Nothing to share yet. Your first kickback lands in about 9h.')
 }

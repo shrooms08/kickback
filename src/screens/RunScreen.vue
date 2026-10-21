@@ -12,6 +12,7 @@ import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
 import { int0, nim2, nimParts } from '../lib/format'
 import { ranksOf, splitCents } from '../lib/plan'
+import { splitLuna } from '../lib/money'
 import { shake } from '../lib/anim'
 import { changePlanFromRun, closeRun, holdRunDone, process, retryFailed } from '../flows'
 
@@ -28,9 +29,13 @@ const partial = computed(() => done.value && flow.doneMode === 'partial')
 const fullDone = computed(() => done.value && !partial.value)
 
 const srec = computed(() => plan.contact(plan.savedRecipient))
-const SLICE: Record<RunStep['type'], number> = { send: 0, restake: 1, keep: 2 }
-const failed = computed<number[]>(() => flow.steps.filter(x => x.st === 'failed').map(x => SLICE[x.type]))
-const split = computed(() => splitCents(a.readyCents, plan.saved))
+const SLICE: Record<RunStep['type'], number> = { send: 0, restake: 1, keep: 2, retire: 1, remove: 2 }
+const live = computed(() => !wallet.isMock)
+const notSent = (x: RunStep) => x.st === 'failed' || (live.value && (x.st === 'skipped' || x.st === 'cancelled'))
+const failed = computed<number[]>(() => flow.steps.filter(notSent).map(x => SLICE[x.type]))
+// Live: the exact Luna split of what this run shares (capped by the wallet); mock: the prototype's cents.
+const split = computed(() => live.value ? splitLuna(flow.runAmountLuna, plan.saved).map(v => v / 1e5) : splitCents(a.readyCents, plan.saved))
+const headline = computed(() => live.value ? nim2(flow.runAmountLuna / 1e5) : nim2(a.readyNim))
 const stack = computed(() => {
   const labels = done.value
     ? [`Sent to ${srec.value.name}`, 'Restaked', 'Kept'].map((l, i) => failed.value.includes(i) ? ['Not sent', 'Not restaked', 'Not kept'][i] : l)
@@ -49,6 +54,12 @@ const reason = computed(() => {
   if (!review.value) return ''
   if (wallet.isPreview) return 'Preview is read only'
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
+  if (live.value) {
+    if (plan.planStartedAt == null) return 'Save your plan first. Kickbacks after that are shared with it.'
+    if (a.readyLuna === 0) return 'Nothing to share yet.'
+    if (flow.runAmountLuna === 0) return 'Your wallet can\'t cover this right now.'
+    return ''
+  }
   if (a.readyCents === 0) return 'Nothing to share yet. Your first kickback lands in about 9h.'
   return ''
 })
@@ -56,6 +67,8 @@ const reason = computed(() => {
 const ST: Record<RunStep['st'], [string, string]> = {
   pending: ['Next', 'var(--kb-text-2)'],
   waiting: ['Approve in Nimiq Pay…', 'var(--kb-text)'],
+  checking: ['Checking if it went through…', 'var(--kb-text)'],
+  confirming: ['Approved. Confirming…', 'var(--kb-text)'],
   approved: ['Approved', 'var(--kb-lime)'],
   cancelled: ['You cancelled', 'var(--kb-text-2)'],
   failed: ['Didn\'t go through. Still in your wallet.', 'var(--kb-text-2)'],
@@ -64,20 +77,24 @@ const ST: Record<RunStep['st'], [string, string]> = {
 const steps = computed(() => flow.steps.map((x, i) => ({
   ...x,
   n: i + 1,
-  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : ST[x.st][0],
+  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : ST[x.st][0],
   color: ST[x.st][1],
   canRetry: running.value && x.st === 'cancelled',
 })))
-const stuck = computed(() => running.value && flow.steps.some(x => x.st === 'cancelled') && !flow.steps.some(x => x.st === 'waiting'))
+const stuck = computed(() => running.value && flow.steps.some(x => x.st === 'cancelled') && !flow.steps.some(x => x.st === 'waiting' || x.st === 'checking' || x.st === 'confirming'))
 
-const doneText = (x: RunStep) => x.st === 'failed'
+const doneText = (x: RunStep) => notSent(x)
   ? `${x.label} didn't go through`
   : x.type === 'send' ? `${nim2(x.amt)} NIM sent to ${srec.value.name}` : x.type === 'restake' ? `${nim2(x.amt)} NIM restaked` : `${nim2(x.amt)} NIM kept in your wallet`
 
-const failAmt = computed(() => flow.steps.filter(x => x.st === 'failed').reduce((t, x) => t + x.amt, 0))
+const failAmt = computed(() => flow.steps.filter(notSent).reduce((t, x) => t + x.amt, 0))
 const failParts = computed(() => nimParts(failAmt.value))
 const okN = computed(() => flow.steps.filter(x => x.st === 'approved').length)
-const keepNote = computed(() => split.value[2] > 0 ? `${nim2(split.value[2])} NIM stays in your wallet. No approval needed.` : 'Nothing is kept back this time.')
+const keepNote = computed(() => {
+  const keep = live.value ? (flow.steps.find(x => x.type === 'keep')?.amt ?? 0) : split.value[2]
+  return keep > 0 ? `${nim2(keep)} NIM stays in your wallet. No approval needed.` : 'Nothing is kept back this time.'
+})
+function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
 </script>
 
 <template>
@@ -87,7 +104,9 @@ const keepNote = computed(() => split.value[2] > 0 ? `${nim2(split.value[2])} NI
       <button class="kb-icon-btn" aria-label="Close" @click="closeRun"><Icon name="close" :size="18" /></button>
     </div>
 
-    <h1 v-if="review" class="kb-h1">Ready to share {{ nim2(a.readyNim) }} NIM</h1>
+    <h1 v-if="review" class="kb-h1">Ready to share {{ headline }} NIM</h1>
+    <p v-if="review && live && flow.runCapped" class="note">{{ flow.runCapped }}</p>
+    <p v-if="!done && live && flow.runNote" class="note">{{ flow.runNote }}</p>
     <h1 v-else-if="running" class="kb-h1">Approve each step</h1>
     <h1 v-else-if="partial" class="kb-h1 big52">{{ okN }} of {{ flow.steps.length }} done</h1>
     <div v-else class="done-h">
@@ -118,12 +137,12 @@ const keepNote = computed(() => split.value[2] > 0 ? `${nim2(split.value[2])} NI
         <div v-for="s in steps" :key="s.n" class="kb-row">
           <div class="dot" :class="s.st">
             <template v-if="s.st === 'pending' || s.st === 'skipped'">{{ s.n }}</template>
-            <div v-else-if="s.st === 'waiting'" class="spin" data-kb-keep="1" />
+            <div v-else-if="s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming'" class="spin" data-kb-keep="1" />
             <Icon v-else-if="s.st === 'approved'" name="check" :size="18" :stroke="2.8" />
             <Icon v-else name="close" :size="16" :stroke="2.6" />
           </div>
           <div class="step-t"><div class="step-l">{{ s.label }}</div><div class="step-s" :style="{ color: s.color }">{{ s.status }}</div></div>
-          <button v-if="s.canRetry" class="retry kb-press" @click="process(s.n - 1)">Try again</button>
+          <button v-if="s.canRetry" class="retry kb-press" @click="retryStep(s.n - 1)">Try again</button>
         </div>
       </div>
       <div class="keep-note">{{ keepNote }}</div>
@@ -150,7 +169,7 @@ const keepNote = computed(() => split.value[2] > 0 ? `${nim2(split.value[2])} NI
     </div>
 
     <div v-if="fullDone" class="next">
-      <div class="next-t"><span class="kb-dim">What happens next:</span> your next kickback lands in 7h 40m</div>
+      <div class="next-t"><span class="kb-dim">What happens next:</span> your next kickback lands in {{ live ? (a.nextIn || 'about 12h') : '7h 40m' }}</div>
       <button class="kb-link" style="padding: 0 12px; flex: none" @click="changePlanFromRun">Change plan</button>
     </div>
 
@@ -198,4 +217,5 @@ const keepNote = computed(() => split.value[2] > 0 ? `${nim2(split.value[2])} NI
 .next { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 20px; background: var(--kb-surface); }
 .next-t { font-size: 14px; line-height: 1.4; min-width: 0; }
 .foot { margin-top: auto; }
+.note { font-size: 14px; line-height: 1.45; color: var(--kb-text-2); margin-top: -8px; }
 </style>

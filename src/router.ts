@@ -20,6 +20,7 @@ export const PATHS: Record<ScreenName, string> = {
   approve: '/approve',
   success: '/success',
   run: '/run',
+  withdraw: '/withdraw',
 }
 
 /** Screens that work before a wallet is connected. */

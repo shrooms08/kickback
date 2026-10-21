@@ -69,7 +69,8 @@ export const KICKBACKS_PER_YEAR = 730
 export const MIN_STAKE_NIM = 100
 export const STAKED_NIM = 25000
 
-export interface Contact { id: string, name: string, ini: string }
+/** A person in the plan. `address` is required for live plans (mock contacts have none). */
+export interface Contact { id: string, name: string, ini: string, address?: string }
 
 export const DEFAULT_CONTACTS: Contact[] = [
   { id: 'mom', name: 'Mom', ini: 'M' },

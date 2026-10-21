@@ -2,11 +2,13 @@
 import { ref } from 'vue'
 import Icon from '../../components/Icon.vue'
 import { useUi } from '../../stores/ui'
-import { isNimiqAddress } from '../../lib/format'
+import { contactAddressProblem, normalizeAddress } from '../../lib/address'
+import { useWallet } from '../../stores/wallet'
 import { shake } from '../../lib/anim'
 import { addContact } from '../../flows'
 
 const ui = useUi()
+const wallet = useWallet()
 const name = ref('')
 const addr = ref('')
 const nameErr = ref('')
@@ -17,11 +19,15 @@ const addrEl = ref<HTMLInputElement>()
 function submit() {
   const n = name.value.trim()
   nameErr.value = n ? '' : 'Add a name.'
-  addrErr.value = isNimiqAddress(addr.value) ? '' : 'That doesn\'t look like a Nimiq address. It starts with NQ and has 36 characters.'
+  // Real checksum check (@nimiq/utils), and never your own address.
+  const problem = contactAddressProblem(addr.value, wallet.isMock ? null : wallet.effectiveAddress)
+  addrErr.value = problem === 'invalid'
+    ? 'That doesn\'t look like a Nimiq address. Check it: it starts with NQ, has 36 characters, and one typo makes it invalid.'
+    : problem === 'own' ? 'That\'s your own address. Add someone else.' : ''
   if (nameErr.value) shake(nameEl.value)
   if (addrErr.value) shake(addrEl.value)
   if (nameErr.value || addrErr.value) return
-  addContact(n)
+  addContact(n, normalizeAddress(addr.value))
 }
 </script>
 

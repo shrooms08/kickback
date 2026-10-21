@@ -74,8 +74,9 @@ const banner = computed(() => {
   return null
 })
 // Preview (read-only view of another address): a persistent strip above everything.
-const previewOn = computed(() => wallet.isPreview && !!nav.screen && !['welcome', 'browser', 'connecting'].includes(nav.screen))
-const previewText = computed(() => `Preview: ${addressShort(wallet.previewAddress)} (read only)`)
+// Dry run (simulated sends) uses the same strip when not previewing.
+const previewOn = computed(() => (wallet.isPreview || wallet.isDry) && !!nav.screen && !['welcome', 'browser', 'connecting'].includes(nav.screen))
+const previewText = computed(() => wallet.isPreview ? `Preview: ${addressShort(wallet.previewAddress)} (read only)` : 'Dry run: no real NIM moves')
 const layerTop = computed(() => {
   const parts = ['var(--kb-safe-top)']
   if (previewOn.value) parts.push('var(--kb-preview-h)')
@@ -311,7 +312,7 @@ function modalDown(e: PointerEvent) {
       <div :ref="el => setDim(l.n, el)" class="dim" :style="{ zIndex: l.z + 2, transform: l.tf, borderRadius: l.r, opacity: l.dim }" />
     </template>
 
-    <div v-if="previewOn" class="preview" role="status"><span class="pdot" />{{ previewText }}</div>
+    <div v-if="previewOn" class="preview" :class="{ dry: !wallet.isPreview }" role="status"><span class="pdot" />{{ previewText }}</div>
     <Banner v-if="banner" :kind="banner.kind" :text="banner.text" :label="banner.label" :style="{ top: bannerTop }" @act="banner.act()" />
 
     <div v-if="chrome" :ref="setChrome" class="chrome" :style="{ zIndex: chrome.z, transform: chrome.tf, borderRadius: chrome.r }">
@@ -343,4 +344,6 @@ function modalDown(e: PointerEvent) {
   border-bottom: 1px solid var(--kb-line); font-size: 12px; font-weight: 700; color: var(--kb-text-2); letter-spacing: .02em;
 }
 .pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--kb-second); }
+.preview.dry { color: var(--kb-lime); }
+.preview.dry .pdot { background: var(--kb-lime); }
 </style>

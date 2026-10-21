@@ -31,3 +31,14 @@ RPC `getAccountByAddress`), a "Preview: NQ.. … (read only)" strip stays at the
 
 Dev only: `http://localhost:5173/?preview=NQ03J45B27LTQHD72PRM73QPSB15LM6HVCR8` reads an address with live data in a
 desktop browser without Nimiq Pay. Production builds ignore it.
+
+## Dry run (Phase 3)
+
+Diagnostics → **Dry run** on. Every send is simulated (answers after 1.5 s, confirms 3 s later) and a strip at the top
+says "Dry run: no real NIM moves". It's persisted and works in production. Controls:
+- **Nimiq Pay answers with:** Approve, Reject, Network error (nothing is sent, so the chain check finds nothing and you
+  get "Failed. Nothing was sent."), or Fail after send (it is sent, but the wallet reports an error, so the chain check finds it and it succeeds).
+- **Set balance** (fake wallet), **Add kickback** (a fake kickback that's ready to share), **Release stake now** (fake inactive stake
+  normally stays locked 2 minutes), **Reset dry run**.
+
+Dev only: `http://localhost:5173/?wallet=NQ…` acts as that wallet without Nimiq Pay (turn dry run on to send).

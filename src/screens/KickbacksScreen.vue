@@ -10,11 +10,19 @@ import { nim2 } from '../lib/format'
 const a = useAccount()
 const data = useData()
 const chart = computed(() => data.chart)
-// Mock data scales against 6.4 like the prototype; live data against the busiest day.
-const scale = computed(() => data.isMock ? 6.4 : Math.max(...chart.value.values, 0.0001))
+// Mock data scales against 6.4 like the prototype. Live data scales against
+// the 90th percentile of daily totals, so one catch-up day (e.g. 18 payouts)
+// doesn't flatten the rest; taller bars are clipped and marked with ↑.
+function p90(values: number[]): number {
+  const v = values.filter(x => x > 0).sort((x, y) => x - y)
+  if (!v.length) return 0.0001
+  return v[Math.min(v.length - 1, Math.ceil(v.length * 0.9) - 1)]
+}
+const scale = computed(() => data.isMock ? 6.4 : p90(chart.value.values))
 // Bars grow from the bottom (scaleY), 30ms apart; today's bar is lime and settles last.
 const bars = computed(() => chart.value.values.map((v, i) => ({
-  h: a.kbEmpty ? chart.value.ghost[i] : Math.max(v > 0 ? 4 : 2, Math.round(v / scale.value * 120)),
+  over: !a.kbEmpty && !data.isMock && v > scale.value * 1.001,
+  h: a.kbEmpty ? chart.value.ghost[i] : Math.min(120, Math.max(v > 0 ? 4 : 2, Math.round(v / scale.value * 112))),
   cls: a.kbEmpty ? 'ghost' : i === chart.value.values.length - 1 ? 'today' : v > 0 ? 'past' : 'zero',
   anim: i < 13 ? `kbBar 420ms var(--kb-ease) ${i * 30}ms both` : `kbBarSettle 520ms var(--kb-ease) ${13 * 30 + 80}ms both`,
 })))
@@ -41,7 +49,10 @@ const emptyBody = computed(() => (!data.isMock && !a.staked) ? 'Stake with a poo
           <div class="rate">{{ chart.perDay }}</div>
         </div>
         <div class="bars">
-          <div v-for="(b, i) in bars" :key="i" class="bar" :class="b.cls" :style="{ height: b.h + 'px', animation: b.anim }" />
+          <div v-for="(b, i) in bars" :key="i" class="col">
+            <span v-if="b.over" class="up" aria-label="Taller than shown">↑</span>
+            <div class="bar" :class="b.cls" :style="{ height: b.h + 'px', animation: b.anim }" />
+          </div>
         </div>
         <div class="labels"><span v-for="l in chart.labels" :key="l">{{ l }}</span></div>
       </div>
@@ -70,7 +81,9 @@ const emptyBody = computed(() => (!data.isMock && !a.staked) ? 'Stake with a poo
 .nothing { font-size: 20px; font-weight: 700; line-height: 1.2; color: var(--kb-text-2); }
 .rate { font-size: 13px; color: var(--kb-text-2); text-align: right; }
 .bars { height: 120px; display: flex; align-items: flex-end; gap: 5px; }
-.bar { flex: 1; border-radius: 6px; transform-origin: 50% 100%; }
+.col { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; position: relative; }
+.bar { border-radius: 6px; transform-origin: 50% 100%; }
+.up { position: absolute; top: -2px; left: 0; right: 0; text-align: center; font-size: 11px; font-weight: 800; line-height: 1; color: var(--kb-label); }
 .bar.past { background: var(--kb-chart-past); }
 .bar.today { background: var(--kb-lime); }
 .bar.zero { background: var(--kb-raised); }

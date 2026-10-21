@@ -7,10 +7,12 @@
     "dev": "vite --host",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview --host",
-    "hatch": "node scripts/gen-hatch.mjs"
+    "hatch": "node scripts/gen-hatch.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@nimiq/mini-app-sdk": "^0.2.4",
+    "@nimiq/utils": "^0.12.4",
     "pinia": "^4.1.0",
     "vue": "^3.5.44",
     "vue-router": "^5.4.0"
@@ -21,6 +23,7 @@
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.3",
     "vite": "^8.3.4",
+    "vitest": "^5.0.5",
     "vue-tsc": "^3.3.13"
   }
 }

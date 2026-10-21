@@ -4,9 +4,9 @@ A Nimiq Pay mini app (Nimiq Mini Apps Competition, cycle 3, EARN). Stake NIM onc
 (Nimiq.Fun or ObsidianStake); the pool pays a kickback about every 12 hours, and Kickback splits each one with
 your plan: send to someone, restake, keep. Staked NIM is never touched by the app.
 
-**Phase 2:** live mainnet data, read only. Pools from the Validators API, stake, kickbacks and payout rhythm from
-`rpc.nimiqwatch.com` (rate limited, cached), the wallet balance from the SDK. Money buttons still show "Coming in
-phase 3". See `docs/data-notes.md`.
+**Phase 3:** real money actions through Nimiq Pay: stake and add stake, Run my plan (send, restake, keep),
+stop earning, undo, withdraw (retire + remove), switch pool. Read-only data from Phase 2. Dry run mode in Diagnostics
+simulates every send. See `docs/staking-lifecycle.md`, `docs/sdk-notes.md`, `docs/data-notes.md`.
 
 ## Run
 
@@ -15,6 +15,7 @@ npm install
 npm run dev        # Vite with --host, port 5173
 npm run build      # vue-tsc type check + production build
 npm run preview
+npm test           # vitest: Luna splitting, ready-to-share ledger, fee reserve, address checksum
 ```
 
 - Inside Nimiq Pay: open `http://<your-mac-ip>:5173` from Nimiq Pay on a phone on the same Wi-Fi.

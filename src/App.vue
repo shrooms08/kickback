@@ -9,6 +9,8 @@ import { router } from './router'
 import { bindFxLayer } from './lib/fx'
 import { wireLiveClock } from './stores/live'
 import { openLive } from './flows'
+import { useOps } from './stores/ops'
+import { syncRunSteps } from './money'
 
 // Dev panel: only in dev builds with ?mock=1. Never part of a production bundle.
 const DevPanel = import.meta.env.DEV ? defineAsyncComponent(() => import('./dev/DevPanel.vue')) : null
@@ -36,6 +38,9 @@ onMounted(async () => {
   window.addEventListener('offline', onOffline)
   bindFxLayer(fx.value || null)
   wireLiveClock()
+  // Run / withdraw steps follow their ops (also after a restart).
+  const ops = useOps()
+  watch(() => ops.ops.map(o => o.phase + (o.slow ? '!' : '')).join(), () => syncRunSteps())
   // Dev only (?preview=NQ..): live data for an address without Nimiq Pay.
   if (wallet.env === 'devpreview') return openLive()
   // Not sure yet if we're inside Nimiq Pay: wait for the provider (3s max).

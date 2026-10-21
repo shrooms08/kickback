@@ -14,6 +14,10 @@ import { formatAddress, isNimiqAddress } from '../../lib/format'
 import { ago } from '../../lib/time'
 import { shake } from '../../lib/anim'
 import { openLive } from '../../flows'
+import { useDry } from '../../stores/dry'
+import type { DryOutcome } from '../../stores/dry'
+import { parseNimInput } from '../../lib/money'
+import { nim2 } from '../../lib/format'
 
 // Hidden diagnostics: what the SDK and the RPC actually returned.
 const ui = useUi()
@@ -21,6 +25,17 @@ const wallet = useWallet()
 const diag = useDiag()
 const { copied, copy } = useCopy()
 const live = useLive()
+const dry = useDry()
+const OUTCOMES: Array<[DryOutcome, string]> = [['approve', 'Approve'], ['reject', 'Reject'], ['network', 'Network error'], ['failAfterSend', 'Fail after send']]
+const dryBal = ref(nim2(dry.chain.balanceLuna / 1e5))
+const dryKb = ref('25')
+function toggleDry() {
+  dry.toggle(!dry.on)
+  live.refresh({ force: true })
+}
+function setDryBalance() { dry.setBalance(parseNimInput(dryBal.value)); live.derive() }
+function addDryKickback() { const l = parseNimInput(dryKb.value); if (l > 0) { dry.addKickback(l); dryBal.value = nim2(dry.chain.balanceLuna / 1e5) } }
+function resetDry() { dry.reset(); dryBal.value = nim2(dry.chain.balanceLuna / 1e5); live.refresh({ force: true }) }
 const data = useData()
 const account = useAccount()
 const now = ref(Date.now())
@@ -75,6 +90,7 @@ const lines = computed(() => {
     ['listAccounts took', ms(diag.listAccountsMs)],
     ['Address (accounts[0])', accounts?.[0] ?? wallet.address ?? 'n/a'],
     ['Preview address', wallet.previewAddress || 'off'],
+    ['Dry run', dry.on ? `ON · next answer: ${dry.outcome} · fake balance ${nim2(dry.chain.balanceLuna / 1e5)} NIM · fake staker ${dry.chain.staker ? `${nim2(dry.chain.staker.balance / 1e5)} active / ${nim2(dry.chain.staker.inactiveBalance / 1e5)} inactive / ${nim2(dry.chain.staker.retiredBalance / 1e5)} retired` : 'none'} · ${dry.txs.length} fake txs` : 'off'],
     ['Reading', wallet.effectiveAddress || 'n/a'],
   ]
   if (accounts && accounts.length > 1) accounts.slice(1).forEach((a, i) => out.push([`accounts[${i + 1}]`, a]))
@@ -121,6 +137,31 @@ async function again() {
     <h2 class="sheet-h">Diagnostics</h2>
     <button class="kb-icon-btn" aria-label="Close" @click="ui.closeSheet()"><Icon name="close" :size="18" /></button>
   </div>
+  <div class="dry">
+    <div class="drow">
+      <div class="kb-eyebrow">Dry run</div>
+      <button class="tog" :class="{ on: dry.on }" role="switch" :aria-checked="dry.on" @click="toggleDry"><span /></button>
+    </div>
+    <p class="dnote">Every send is simulated: no real NIM moves. Answers after 1.5 s, confirms 3 s later.</p>
+    <template v-if="dry.on">
+      <div class="kb-eyebrow">Nimiq Pay answers with</div>
+      <div class="chips">
+        <button v-for="[k, l] in OUTCOMES" :key="k" class="chip" :class="{ sel: dry.outcome === k }" @click="dry.setOutcome(k)">{{ l }}</button>
+      </div>
+      <div class="prow3">
+        <input v-model="dryBal" class="pin" inputmode="decimal" aria-label="Fake balance in NIM">
+        <button class="kb-btn pbtn" @click="setDryBalance">Set balance</button>
+      </div>
+      <div class="prow3">
+        <input v-model="dryKb" class="pin" inputmode="decimal" aria-label="Fake kickback in NIM">
+        <button class="kb-btn pbtn" @click="addDryKickback">Add kickback</button>
+      </div>
+      <div class="prow">
+        <button class="kb-btn pbtn" @click="dry.releaseNow()">Release stake now</button>
+        <button class="kb-btn pbtn" @click="resetDry">Reset dry run</button>
+      </div>
+    </template>
+  </div>
   <div class="preview">
     <label class="kb-eyebrow" for="kb-preview">Preview address</label>
     <input
@@ -153,6 +194,18 @@ async function again() {
 .k { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--kb-label); }
 .v { font: 500 12px/1.4 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--kb-text); word-break: break-all; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
 .preview { display: flex; flex-direction: column; gap: 8px; }
+.dry { display: flex; flex-direction: column; gap: 8px; border-radius: 16px; border: 1px solid var(--kb-line); padding: 12px; }
+.drow { display: flex; justify-content: space-between; align-items: center; }
+.dnote { font-size: 12px; line-height: 1.4; color: var(--kb-text-2); }
+.tog { width: 52px; height: 30px; border-radius: 999px; border: 1px solid var(--kb-line); background: var(--kb-bg); position: relative; cursor: pointer; padding: 0; }
+.tog span { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--kb-text-3); transition: transform 160ms var(--kb-ease); }
+.tog.on { background: var(--kb-lime); border-color: var(--kb-lime); }
+.tog.on span { transform: translateX(22px); background: var(--kb-bg); }
+.chips { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.chip { height: 40px; border-radius: 12px; border: 1px solid var(--kb-line); background: transparent; color: var(--kb-text); font: 700 13px var(--kb-font); cursor: pointer; }
+.chip.sel { background: var(--kb-lime); color: var(--kb-bg); border-color: var(--kb-lime); }
+.prow3 { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.prow3 .pbtn { padding: 0 14px; }
 .pin { height: 52px; border-radius: var(--kb-r-input); border: 1px solid var(--kb-line); background: var(--kb-bg); color: var(--kb-text); padding: 0 14px; font: 600 14px var(--kb-font); letter-spacing: .02em; outline: none; width: 100%; }
 .pin.err { border-color: var(--kb-error); }
 .perr { font-size: 13px; line-height: 1.4; color: var(--kb-error); }

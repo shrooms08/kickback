@@ -3,12 +3,13 @@ import { computed } from 'vue'
 import SegmentedBar from './SegmentedBar.vue'
 import { useAccount } from '../stores/account'
 import { useWallet } from '../stores/wallet'
-import { nim2 } from '../lib/format'
+import { int0, nim2 } from '../lib/format'
 import { now, span } from '../lib/time'
-import { undoUnstake } from '../flows'
+import { goPools, undoUnstake, withdraw } from '../flows'
 
-// Stake on its way back. Mock mode keeps the prototype's fixed copy; live
-// mode counts down to the block after the reporting window.
+// Stake on its way back. Mock mode keeps the prototype's fixed copy. Live:
+// counts down to release (next election + one epoch), then offers Withdraw.
+// Undo (reactivate) works while the stake is inactive, not once it's retired.
 const a = useAccount()
 const wallet = useWallet()
 
@@ -16,19 +17,27 @@ const view = computed(() => {
   if (wallet.isMock || a.unstakeReadyAt == null) {
     return { left: 'About 2 days left', body: 'Available in about 2 days. Nothing else to do.', seg: 1, ready: false }
   }
-  const left = a.unstakeReadyAt - now.value
-  if (left <= 0) return { left: 'Ready now', body: 'Available now. It stays put until you withdraw it.', seg: 8, ready: true }
-  return { left: `About ${span(left)} left`, body: `Available in about ${span(left)}. Nothing else to do.`, seg: Math.max(1, Math.round(a.unstakeProgress * 8)), ready: false }
+  // The shared clock ticks every 30 s; read the real time so a release shows at once.
+  void now.value
+  const left = a.unstakeReadyAt - Date.now()
+  if (left <= 0) return { left: 'Ready now', body: 'Released. Withdraw it to your wallet, or keep earning instead.', seg: 8, ready: true }
+  const t = left < 120_000 ? 'a minute' : span(left)
+  return { left: `About ${t} left`, body: `Available in about ${t}. Nothing else to do.`, seg: Math.max(1, Math.round(a.unstakeProgress * 8)), ready: false }
 })
+const canUndo = computed(() => wallet.isMock || a.canUndo)
 </script>
 
 <template>
   <div class="card">
     <div class="row"><div class="kb-eyebrow">Unstaking</div><span class="meta">{{ view.left }}</span></div>
-    <div class="big">Your {{ nim2(a.unstakingNim) }} NIM is {{ view.ready ? 'ready to come back' : 'on its way back' }}.</div>
+    <div v-if="view.ready" class="big">{{ int0(Math.floor(a.unstakingNim)) }} NIM ready to withdraw</div>
+    <div v-else class="big">Your {{ nim2(a.unstakingNim) }} NIM is on its way back.</div>
     <SegmentedBar :segments="8" :value="view.seg" size="lg" :pulse="!view.ready" />
     <div class="small">{{ view.body }}</div>
-    <button class="kb-btn ghost48" @click="undoUnstake">Undo: keep earning</button>
+    <button v-if="view.ready" class="kb-btn kb-btn-primary" @click="withdraw">Withdraw</button>
+    <button v-if="canUndo" class="kb-btn ghost48" @click="undoUnstake">{{ view.ready ? 'Keep earning instead' : 'Undo: keep earning' }}</button>
+    <!-- Released and nothing active: one update moves it to a new pool and reactivates it. -->
+    <button v-if="view.ready && canUndo && !wallet.isMock && a.stakedNim === 0" class="kb-btn ghost48" @click="goPools">Move to another pool</button>
   </div>
 </template>
 

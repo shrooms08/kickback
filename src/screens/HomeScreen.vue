@@ -53,6 +53,7 @@ const lateLine = computed(() => {
 const headline = computed(() => a.nextIn ? `Next kickback in ${a.nextIn}` : 'Waiting for your first kickback')
 const earnedSub = computed(() => live.value ? `from ${a.kbCount} kickback${a.kbCount === 1 ? '' : 's'}` : `about $${nim2(a.earnedNim * NIM_USD)} · from ${a.kbCount} kickbacks`)
 const readySub = computed(() => {
+  if (live.value && plan.planStartedAt == null) return 'Save your plan to start sharing'
   if (!a.readyCents) return 'Nothing to share yet'
   return live.value ? `${a.waiting} kickback${a.waiting === 1 ? '' : 's'} waiting` : `about $${nim2(a.readyNim * NIM_USD)} · ${a.waiting} kickbacks waiting`
 })
@@ -105,7 +106,7 @@ const poolPaid = computed(() => {
       <UnstakingCard v-if="a.unstaking && !unstakingOnly" />
 
       <div class="block8">
-        <div class="kb-eyebrow">Earned so far</div>
+        <div class="kb-eyebrow">{{ live && !a.earnedComplete ? 'Earned (last 30 days)' : 'Earned so far' }}</div>
         <template v-if="earnedShow">
           <NimAmount id="earned" :value="a.earnedNim" :size="64" :dec-size="36" />
           <div class="sub">{{ earnedSub }}</div>

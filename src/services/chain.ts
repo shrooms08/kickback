@@ -44,12 +44,12 @@ export interface Tx {
 
 // ---------- single reads ----------
 
-export function getStaker(address: string): Promise<Result<Staker | null>> {
-  return rpc<Staker | null>('getStakerByAddress', [address], { ttl: 60e3 })
+export function getStaker(address: string, ttl = 60e3): Promise<Result<Staker | null>> {
+  return rpc<Staker | null>('getStakerByAddress', [address], { ttl })
 }
 
-export function getAccountBalance(address: string): Promise<Result<number>> {
-  return rpc<{ balance: number }>('getAccountByAddress', [address], { ttl: 60e3 })
+export function getAccountBalance(address: string, ttl = 60e3): Promise<Result<number>> {
+  return rpc<{ balance: number }>('getAccountByAddress', [address], { ttl })
     .then(r => ({ ...r, value: Number(r.value?.balance) || 0 }))
 }
 
@@ -70,6 +70,45 @@ export async function unstakeReadyAt(inactiveFrom: number): Promise<{ readyAt: n
   ])
   const t = Date.now()
   return { readyAt: t + (release.value - head.value) * 1000, startedAt: t + (inactiveFrom - head.value) * 1000 }
+}
+
+// ---------- epochs ----------
+// Albatross: an epoch is 43,200 blocks of 1 s (12 h). Stake changes count from
+// the next election block (the first block of the next epoch).
+export const GENESIS_BLOCK = 3_456_000
+export const BLOCKS_PER_EPOCH = 43_200
+
+export function nextElectionBlock(head: number): number {
+  return GENESIS_BLOCK + (Math.floor((head - GENESIS_BLOCK) / BLOCKS_PER_EPOCH) + 1) * BLOCKS_PER_EPOCH
+}
+
+export async function headBlock(): Promise<{ block: number, at: number }> {
+  const r = await rpc<number>('getBlockNumber', [], { ttl: 60e3 })
+  return { block: r.value, at: r.at }
+}
+
+/** When the next epoch starts (ms), from a head block reading. */
+export function nextElectionAt(head: { block: number, at: number }): number {
+  return head.at + (nextElectionBlock(head.block) - head.block) * 1000
+}
+
+/**
+ * When a new stake's first kickback should land: the stake counts from the
+ * next election, earns for one epoch, then the pool pays at its next payout
+ * after that epoch. Falls back to "epoch end + 1 h" without pool timing.
+ */
+export function firstKickbackAt(head: { block: number, at: number }, stats: PoolStats | null): number {
+  const earnedBy = nextElectionAt(head) + BLOCKS_PER_EPOCH * 1000
+  if (!stats?.lastPaidAt || !stats.intervalH) return earnedBy + 3600e3
+  const step = stats.intervalH * 3600e3
+  let t = stats.lastPaidAt
+  while (t < earnedBy) t += step
+  return t
+}
+
+/** When stake deactivated now would be released: next election + one epoch. */
+export function releaseIfStoppedNow(head: { block: number, at: number }): number {
+  return nextElectionAt(head) + BLOCKS_PER_EPOCH * 1000 + 1000
 }
 
 // ---------- history ----------

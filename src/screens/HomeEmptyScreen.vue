@@ -25,7 +25,9 @@ const monthly = computed(() => Math.round(bal.value * data.bestApy / 12))
       <AppHeader />
       <div class="block">
         <div class="kb-eyebrow">Wallet balance</div>
-        <NimAmount id="wallet-balance" :value="bal" :size="58" :dec-size="32" />
+        <NimAmount v-if="wallet.balanceKnown" id="wallet-balance" :value="bal" :size="58" :dec-size="32" />
+        <div v-else-if="wallet.balanceError" class="sub">Couldn't read your balance. It shows here once Nimiq Pay is ready.</div>
+        <div v-else class="kb-skel" style="width: 62%; height: 52px; border-radius: 12px" aria-label="Loading balance" />
         <!-- No price feed yet: the fiat estimate only shows with mock data. -->
         <div v-if="wallet.isMock" class="sub">{{ aboutUsd(bal * NIM_USD) }}</div>
       </div>

@@ -4,6 +4,7 @@ import Icon from '../components/Icon.vue'
 import { useFlow } from '../stores/flow'
 import { useAccount } from '../stores/account'
 import { useUi } from '../stores/ui'
+import type { HelpCtx } from '../stores/ui'
 import { retryError } from '../flows'
 
 // Failure pattern: 1 what happened, 2 is my NIM safe (lime + shield),
@@ -12,12 +13,15 @@ const flow = useFlow()
 const account = useAccount()
 const ui = useUi()
 
-const copy = computed(() => ({
+const copy = computed<string[]>(() => (({
   stake: ['Staking didn\'t go through', 'Nimiq Pay couldn\'t send the transaction.', 'Your NIM is safe. Nothing was staked.', 'Try again'],
   switch: ['The switch didn\'t go through', 'Nimiq Pay couldn\'t send the transaction.', `Your NIM is safe and still earning with ${account.poolName}.`, 'Back to pool'],
   unstake: ['That didn\'t go through', 'Nimiq Pay couldn\'t send the transaction.', 'Your NIM is safe. Nothing changed.', 'Back to pool'],
   network: ['Can\'t reach the network', 'Kickback couldn\'t load your latest data.', 'Your NIM is safe. Nothing was sent.', 'Try again'],
-}[flow.errorFrom || 'network']))
+  notSent: ['That didn\'t go through', 'Failed. Nothing was sent.', 'Your NIM is safe and still in your wallet.', 'Back'],
+  chainFailed: ['The network didn\'t accept it', 'It reached the network but failed. Nothing moved.', 'Your NIM is safe and still in your wallet.', 'Back'],
+} as Record<string, string[]>)[flow.errorFrom || 'network'] ?? []))
+const helpCtx = computed(() => (['stake', 'switch', 'unstake', 'network'].includes(flow.errorFrom ?? '') ? flow.errorFrom : flow.approveKind === 'stake' ? 'stake' : 'general') as HelpCtx)
 </script>
 
 <template>
@@ -30,7 +34,7 @@ const copy = computed(() => ({
         <div class="kb-safe-line"><Icon name="shieldCheck" :size="18" /><span>{{ copy[2] }}</span></div>
       </div>
       <button class="kb-btn kb-btn-primary" @click="retryError"><Icon name="retry" :size="20" :stroke="2.4" />{{ copy[3] }}</button>
-      <button class="kb-link kb-link-quiet" @click="ui.openHelp(flow.errorFrom || 'network')">Get help</button>
+      <button class="kb-link kb-link-quiet" @click="ui.openHelp(helpCtx)">Get help</button>
     </div>
   </div>
 </template>

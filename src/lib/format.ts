@@ -58,7 +58,5 @@ export function formatAddress(raw: string): string {
   return compact.replace(/(.{4})/g, '$1 ').trim()
 }
 
-/** Nimiq user-friendly address check: NQ + 2 digits + 32 base32 chars (no I, O, W, Z). */
-export function isNimiqAddress(raw: string): boolean {
-  return /^NQ\d{2}[0-9A-HJ-NP-VXY]{32}$/.test(raw.replace(/\s+/g, '').toUpperCase())
-}
+/** Nimiq address with a valid checksum (official @nimiq/utils check). */
+export { isValidAddress as isNimiqAddress } from './address'

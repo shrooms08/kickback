@@ -150,6 +150,8 @@ const inflight = new Map<string, Promise<unknown>>()
 export interface CallOptions {
   /** Serve from cache without a request while younger than this (ms). */
   ttl?: number
+  /** Polling: always ask the node, never cache the answer. */
+  noStore?: boolean
 }
 
 export interface Result<T> {
@@ -167,6 +169,11 @@ export interface Result<T> {
  */
 export async function rpc<T>(method: string, params: unknown[], opts: CallOptions = {}): Promise<Result<T>> {
   const key = `rpc:${method}:${JSON.stringify(params)}`
+  if (opts.noStore) {
+    let p = inflight.get(key) as Promise<T> | undefined
+    if (!p) { p = send<T>(method, params).finally(() => inflight.delete(key)); inflight.set(key, p) }
+    return { value: await p, at: Date.now(), stale: false }
+  }
   const cached = cacheGet<T>(key)
   if (cached && opts.ttl && ageMs(cached) < opts.ttl) {
     rpcStats.cacheHits++

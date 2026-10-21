@@ -1,17 +1,45 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Modal from '../components/Modal.vue'
 import KLogo from '../components/KLogo.vue'
 import Icon from '../components/Icon.vue'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { useFlow } from '../stores/flow'
 import { useData } from '../stores/data'
-import { int0 } from '../lib/format'
+import { useWallet } from '../stores/wallet'
+import { useOps } from '../stores/ops'
+import { useLive } from '../stores/live'
+import { int0, nim2 } from '../lib/format'
+import { firstKickbackAt, headBlock } from '../services/chain'
 import { successHome } from '../flows'
 
 const flow = useFlow()
 const data = useData()
-const amount = computed(() => int0(Math.floor(parseFloat(flow.amount || '0') || 0)))
+const wallet = useWallet()
+const ops = useOps()
+const live = useLive()
+const amount = computed(() => wallet.isMock ? `${int0(Math.floor(parseFloat(flow.amount || '0') || 0))}.00` : nim2(flow.lastStakeLuna / 1e5))
+const op = computed(() => (wallet.isMock ? undefined : ops.byId(flow.approveOpId)))
+const confirmed = computed(() => wallet.isMock || op.value?.phase === 'confirmed')
+const failed = computed(() => op.value?.phase === 'failed')
+
+// New stake counts from the next election block, earns for one epoch, then the
+// pool pays at its next payout. Adding to an existing stake follows the same rule.
+const firstH = ref<number | null>(null)
+onMounted(async () => {
+  if (wallet.isMock) return
+  const head = live.head ?? await headBlock().catch(() => null)
+  if (!head) return
+  const p = data.pool(flow.poolPick)
+  const at = firstKickbackAt(head, p.lastPaidAt && p.intervalH ? { alive: true, lastPaidAt: p.lastPaidAt, batches: [], intervalH: p.intervalH, source: 'probe', checkedAt: Date.now() } : null)
+  firstH.value = Math.max(1, Math.round((at - Date.now()) / 3600e3))
+})
+const firstLine = computed(() => {
+  if (wallet.isMock) return 'First kickback lands in about 12h'
+  const h = firstH.value
+  if (flow.lastStakeAdd) return h ? `The added NIM earns from the next epoch. More per kickback in about ${h}h` : 'The added NIM earns from the next epoch'
+  return h ? `First kickback lands in about ${h}h` : 'First kickback lands in about 12 to 24h'
+})
 </script>
 
 <template>
@@ -24,16 +52,18 @@ const amount = computed(() => int0(Math.floor(parseFloat(flow.amount || '0') || 
         <div class="coin"><KLogo :size="58" color="var(--kb-bg)" animate /></div>
       </div>
       <div class="copy">
-        <h1 class="title">You're earning</h1>
-        <p class="lead">{{ amount }}.00 NIM is staked with {{ data.pool(flow.poolPick).name }}. It stays yours.</p>
+        <h1 class="title">{{ flow.lastStakeAdd && !wallet.isMock ? 'Stake added' : 'You\'re earning' }}</h1>
+        <p class="lead">{{ amount }} NIM is staked with {{ data.pool(flow.poolPick).name }}. It stays yours.</p>
       </div>
     </div>
     <div class="next">
       <div class="row"><div class="kb-eyebrow">What happens next</div><span class="count">1 of 3</span></div>
       <SegmentedBar :segments="3" :value="1" size="sm" pulse />
       <div class="steps">
-        <div class="step"><div class="dot done"><Icon name="check" :size="14" :stroke="3" /></div><span class="strong">Stake confirmed</span></div>
-        <div class="step"><div class="dot live"><span class="breath" /></div><span class="strong">First kickback lands in about 12h</span></div>
+        <div v-if="confirmed" class="step"><div class="dot done"><Icon name="check" :size="14" :stroke="3" /></div><span class="strong">Stake confirmed</span></div>
+        <div v-else-if="failed" class="step"><div class="dot todo">!</div><span class="strong">The network didn't accept it. Nothing moved.</span></div>
+        <div v-else class="step"><div class="dot live"><span class="breath" /></div><span class="strong">{{ op?.slow ? 'Still confirming your stake' : 'Confirming your stake…' }}</span></div>
+        <div class="step"><div class="dot" :class="confirmed ? 'live' : 'todo'"><span v-if="confirmed" class="breath" /><template v-else>2</template></div><span :class="confirmed ? 'strong' : 'kb-dim'">{{ firstLine }}</span></div>
         <div class="step"><div class="dot todo">3</div><span class="kb-dim">Split it with your plan</span></div>
       </div>
     </div>

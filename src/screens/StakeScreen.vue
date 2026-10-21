@@ -12,12 +12,24 @@ import { int0, nim2 } from '../lib/format'
 import { shake } from '../lib/anim'
 import { back } from '../router'
 import { holdStakeDone } from '../flows'
+import { useUi } from '../stores/ui'
+import { checkStake, FEE_RESERVE_LUNA, maxStake, parseNimInput } from '../lib/money'
+import { sameAddr } from '../services/chain'
 
 const flow = useFlow()
 const account = useAccount()
 const data = useData()
 const wallet = useWallet()
 const amountEl = ref<HTMLElement>()
+const ui = useUi()
+const live = computed(() => !wallet.isMock)
+
+// Live: new staker, adding to the same pool, or blocked (staking with another pool).
+const mode = computed<'new' | 'add' | 'other'>(() => {
+  if (!live.value || !account.staked) return 'new'
+  return sameAddr(account.pool, data.pool(flow.poolPick).validator) ? 'add' : 'other'
+})
+const liveCheck = computed(() => checkStake(parseNimInput(flow.amount), wallet.effectiveBalanceLuna, mode.value === 'new'))
 
 const bal = computed(() => account.walletNim)
 const n = computed(() => parseFloat(flow.amount || '0') || 0)
@@ -25,10 +37,25 @@ const parts = computed(() => flow.amount.split('.'))
 const amtInt = computed(() => parts.value[0] ? int0(Number(parts.value[0])) : '0')
 const amtDec = computed(() => flow.amount.includes('.') ? '.' + (parts.value[1] || '') : '')
 const amtSize = computed(() => amtInt.value.length > 7 ? 46 : amtInt.value.length > 5 ? 54 : 64)
-const bad = computed(() => n.value > 0 && (n.value < MIN_STAKE_NIM || n.value > bal.value || bal.value < MIN_STAKE_NIM))
+const bad = computed(() => live.value
+  ? n.value > 0 && liveCheck.value !== 'ok'
+  : n.value > 0 && (n.value < MIN_STAKE_NIM || n.value > bal.value || bal.value < MIN_STAKE_NIM))
 
 const reason = computed(() => {
   if (wallet.isPreview) return 'Preview is read only'
+  if (live.value) {
+    if (account.offline) return 'You\'re offline. Reconnect to stake.'
+    if (mode.value === 'other') return `You're staking with ${account.poolName}. Switch pool to move your stake.`
+    if (!wallet.balanceKnown) return 'Reading your balance…'
+    const max = nim2(maxStake(wallet.effectiveBalanceLuna) / 1e5)
+    switch (liveCheck.value) {
+      case 'balance-below-min': return `You have ${nim2(bal.value)} NIM. The minimum is 100 NIM.`
+      case 'zero': return mode.value === 'add' ? 'Enter how much NIM to add.' : 'Enter how much NIM to stake.'
+      case 'below-min': return 'The minimum is 100 NIM.'
+      case 'over-balance': return `You can stake up to ${max} NIM. A little stays for fees.`
+      default: return ''
+    }
+  }
   if (account.offline) return 'You\'re offline. Reconnect to stake.'
   if (bal.value < MIN_STAKE_NIM) return `You have ${nim2(bal.value)} NIM. The minimum is 100 NIM.`
   if (n.value === 0) return 'Enter how much NIM to stake.'
@@ -46,7 +73,12 @@ const projection = computed(() => {
   return `About ${nim2(perKb)} NIM per kickback, about ${int0(Math.round(month))} NIM a month.`
 })
 
-const chips = computed(() => [['100', '100'], ['500', '500'], ['1,000', '1000'], ['Max', String(Math.floor(bal.value * 100) / 100)]] as const)
+const maxText = computed(() => live.value ? String(Math.floor(maxStake(wallet.effectiveBalanceLuna) / 1000) / 100) : String(Math.floor(bal.value * 100) / 100))
+const chips = computed(() => [['100', '100'], ['500', '500'], ['1,000', '1000'], ['Max', maxText.value]] as const)
+const title = computed(() => mode.value === 'add' ? `Add to stake with ${data.pool(flow.poolPick).name}` : `Stake with ${data.pool(flow.poolPick).name}`)
+const balLine = computed(() => live.value && mode.value === 'add'
+  ? `Balance ${nim2(bal.value)} NIM · Keeps ${nim2(FEE_RESERVE_LUNA / 1e5)} NIM for fees`
+  : `Balance ${nim2(bal.value)} NIM · Minimum 100 NIM`)
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del']
 
 function errOf(a: string) {
@@ -76,14 +108,14 @@ function press(k: string) {
 <template>
   <div class="kb-scroll">
     <div class="kb-page-push" style="gap: 14px; padding-bottom: calc(20px + var(--kb-safe-bottom))">
-      <StepHeader :step="2" label="Step 2 of 2" :title="`Stake with ${data.pool(flow.poolPick).name}`" @back="back('pools')" />
+      <StepHeader :step="2" label="Step 2 of 2" :title="title" @back="back('pools')" />
       <div class="amount">
         <div ref="amountEl" class="amt-row">
           <span class="amt kb-num" :class="{ bad }" :style="{ fontSize: amtSize + 'px' }">{{ amtInt }}<span class="dec">{{ amtDec }}</span></span>
           <span class="unit">NIM</span>
         </div>
         <div v-if="data.isMock" class="sub">about ${{ nim2(n * NIM_USD) }}</div>
-        <div class="sub">Balance {{ nim2(bal) }} NIM · Minimum 100 NIM</div>
+        <div class="sub">{{ balLine }}</div>
       </div>
       <div class="chips">
         <button v-for="[l, v] in chips" :key="l" class="chip kb-press" :class="{ on: flow.amount === v }" @click="setAmount(v)">{{ l }}</button>
@@ -100,7 +132,8 @@ function press(k: string) {
       </div>
       <div class="foot">
         <div v-if="reason" class="kb-reason">{{ reason }}</div>
-        <HoldButton label="Hold to stake" :disabled="!!reason" @done="holdStakeDone" @blocked="shake(amountEl)" />
+        <HoldButton :label="mode === 'add' ? 'Hold to add' : 'Hold to stake'" :disabled="!!reason" @done="holdStakeDone" @blocked="shake(amountEl)" />
+        <button v-if="mode === 'other'" class="kb-btn kb-btn-ghost switch" @click="ui.openSheet('switch')">Switch pool</button>
       </div>
     </div>
   </div>
@@ -128,4 +161,5 @@ function press(k: string) {
 }
 .key:active { background: var(--kb-raised); transform: scale(var(--kb-press-scale)); }
 .foot { margin-top: auto; }
+.switch { margin-top: 10px; }
 </style>

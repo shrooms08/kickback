@@ -78,3 +78,49 @@ Same as Nimcade and the Nimiq docs: `server: { host: true, port: 5173 }` in `vit
 - `sendBasicTransaction` is documented as returning the "transaction hash", but the JSDoc says "the serialized transaction".
   Treat the string as opaque until phase 3 checks it on-chain.
 - Whether `getBalance` returns the total or only the spendable balance for an address that also has stake.
+
+## Phase 3: sending (confirmed against the installed 0.2.4 types and the nimiq.dev provider reference)
+
+| Method | Params (all `fee?`, `validityStartHeight?` optional) | Returns |
+|---|---|---|
+| `sendBasicTransaction` | `{ recipient, value }` | `string` tx hash |
+| `sendBasicTransactionWithData` | `{ recipient, value, data }`, where `data` is a **plain text string** that's public on chain. Kickback sends `"Kickback"`. | `string` |
+| `sendNewStakerTransaction` | `{ delegation, value }` | `string` |
+| `sendStakeTransaction` | `{ value }` | `string` |
+| `sendSetActiveStakeTransaction` | `{ newActiveBalance }` | `string` |
+| `sendUpdateStakerTransaction` | `{ newDelegation, reactivateAllStake? }` | `string` |
+| `sendRetireStakeTransaction` | `{ retireStake }` | `string` |
+| `sendRemoveStakeTransaction` | `{ value }` | `string` |
+
+- Every call shows its own Nimiq Pay confirmation.
+- The docs say "A returned hash identifies the transaction; it does not prove successful execution or finality."
+- Nimiq Pay chooses the sender. There's no address parameter.
+
+**Default fee:** "Nimiq Pay chooses a fee automatically, using 0 if possible." Kickback never passes `fee`, and keeps 0.01 NIM in reserve.
+
+### Error types (`NimiqProviderError.type`, with the fallback RPC code)
+
+| Type | Code | Kickback treats it as |
+|---|---|---|
+| `PERMISSION_DENIED` | 4001 | **Cancelled.** "You cancelled. Nothing was sent." |
+| `UNKNOWN_REQUEST` | 4200 | Not sent: the host doesn't support the request. |
+| `INVALID_TRANSACTION` | -32602 | Not sent: bad parameters. |
+| `NETWORK_ERROR` | -32000 | If the message says "Nimiq network is not ready", the host is still syncing, so it **retries 5 times** (1, 2, 3, 4, 5 s) before sending anything. Otherwise **unknown**: search the chain. |
+| `INTERNAL_ERROR` | -32603 | Unknown: search the chain. |
+| `UNKNOWN_ERROR` (or any other type) | any | Unknown: search the chain. |
+
+**After an unknown error:** check the newest 25 transactions of the address every 5 s, for up to 60 s. Matching is by sender, recipient, value and the staking data type byte (`05` CreateStaker, `06` AddStake, `07` UpdateStaker, `08` SetActiveStake, `09` RetireStake). The result is then either "sent, confirming" or "Failed. Nothing was sent."
+
+**Confirming:** poll RPC `getTransactionByHash(hash)` every 4 s.
+- `-32603 "Transaction not found: …"` means not yet.
+- `blockNumber > 0` means included, and `executionResult: false` means it failed on chain.
+- After 2 minutes the app shows "Still confirming" and keeps polling in the background.
+
+**Never twice:**
+- Each send is an op persisted per address in localStorage. Reopening the app resumes checking (a chain search or inclusion polling) and never re-sends.
+- Run my plan and Withdraw steps are persisted too. A run that can't continue ends as partial, with Retry for only the unsent amounts.
+
+### `getBalance` on the phone
+- The first call 272 ms after boot failed with `NETWORK_ERROR -32000 "Nimiq network is not ready"`.
+- The fix: `getBalance` retries on that error, the cached balance shows at once, and RPC `getAccountByAddress` fills in while the SDK retries.
+- Home never shows a fake 0. An error shows only if the SDK and the RPC both fail.

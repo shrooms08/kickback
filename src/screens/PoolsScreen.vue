@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import StepHeader from '../components/StepHeader.vue'
 import PoolCard from '../components/PoolCard.vue'
 import { useFlow } from '../stores/flow'
@@ -22,14 +22,21 @@ const pickName = computed(() => data.pool(flow.poolPick).name)
 const isCurrent = computed(() => flow.poolPick === account.pool || sameAddr(flow.poolPick, account.pool))
 const cta = computed(() => {
   if (!switchMode.value) return `Continue with ${pickName.value}`
-  return isCurrent.value ? `You're already with ${account.poolName}` : `Switch to ${pickName.value}`
+  if (isCurrent.value) return data.isMock ? `You're already with ${account.poolName}` : `Add to stake with ${account.poolName}`
+  return `Switch to ${pickName.value}`
 })
 const loading = computed(() => !data.isMock && !data.pools.length && data.poolsState !== 'error')
 const empty = computed(() => !data.isMock && !data.pools.length && data.poolsState === 'error')
 
+// Make sure a listed pool is selected, also when the list arrives after this screen opened.
+function ensurePick() {
+  if (!data.pools.length || data.pools.some(p => p.id === flow.poolPick)) return
+  const other = switchMode.value ? data.pools.find(p => !sameAddr(p.validator, account.pool)) : null
+  flow.poolPick = (other ?? data.pools[0]).id
+}
+watch(() => data.pools.map(p => p.id).join(), ensurePick)
 onMounted(() => {
-  // Make sure a listed pool is selected once the list is in.
-  if (data.pools.length && !data.pools.some(p => p.id === flow.poolPick)) flow.poolPick = data.pools[0].id
+  ensurePick()
   if (empty.value) live.refresh()
 })
 </script>

@@ -14,6 +14,7 @@ import StakeScreen from './StakeScreen.vue'
 import ApproveScreen from './ApproveScreen.vue'
 import SuccessScreen from './SuccessScreen.vue'
 import RunScreen from './RunScreen.vue'
+import WithdrawScreen from './WithdrawScreen.vue'
 
 export const SCREEN_COMPONENTS: Record<ScreenName, Component> = {
   welcome: WelcomeScreen,
@@ -30,4 +31,5 @@ export const SCREEN_COMPONENTS: Record<ScreenName, Component> = {
   approve: ApproveScreen,
   success: SuccessScreen,
   run: RunScreen,
+  withdraw: WithdrawScreen,
 }

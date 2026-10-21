@@ -51,6 +51,16 @@ export const useAccount = defineStore('account', {
     /** When inactive stake can be withdrawn (ms), and how far along it is (0..1). */
     unstakeReadyAt: null as number | null,
     unstakeProgress: 0,
+    /** Retired stake (ready to remove), NIM. */
+    retiredNim: 0,
+    /** Inactive (not yet retired) stake can still be reactivated. */
+    canUndo: true,
+    /** Ready to share in integer Luna (live), for money maths. */
+    readyLuna: 0,
+    /** Earned so far covers the full history (false: last 30 days only). */
+    earnedComplete: true,
+    /** When a pool switch takes effect (next election), ms. */
+    switchEffectiveAt: null as number | null,
   }),
   getters: {
     poolName: s => useData().pool(s.pool).name,
@@ -64,6 +74,8 @@ export const useAccount = defineStore('account', {
       return wallet.effectiveBalanceNim
     },
     unstaking: s => s.poolState === 'unstaking',
+    /** Inactive stake is past its lock: can be withdrawn now. */
+    unstakeReady: s => s.unstakeReadyAt != null && s.unstakeReadyAt <= Date.now(),
     switching: s => s.poolState === 'switching',
     payoutsEmpty: s => s.emptyAcct || s.noPayouts,
     /** Amount shown on the Unstaking card. */

@@ -7,7 +7,7 @@ import { useAccount } from '../stores/account'
 import { useUi } from '../stores/ui'
 import { useData } from '../stores/data'
 import { nim2, nimParts } from '../lib/format'
-import { ago, now } from '../lib/time'
+import { ago, now, span } from '../lib/time'
 import { goPools, switchPool } from '../flows'
 
 const a = useAccount()
@@ -65,7 +65,7 @@ const othersLine = computed(() => {
       <div v-if="a.switching" class="state">
         <div class="row"><div class="kb-eyebrow">Switching pool</div><span class="meta">Step 1 of 2</span></div>
         <SegmentedBar :segments="2" :value="1" size="lg" pulse />
-        <div class="body15">Moving to {{ a.switchToName }}. Your NIM keeps earning with {{ a.poolName }} until the switch takes effect at the next epoch.</div>
+        <div class="body15">{{ live ? `Moving to ${a.switchToName}. Your NIM starts earning there at the next epoch${a.switchEffectiveAt ? `, in about ${span(Math.max(0, a.switchEffectiveAt - Date.now()))}` : ''}.` : `Moving to ${a.switchToName}. Your NIM keeps earning with ${a.poolName} until the switch takes effect at the next epoch.` }}</div>
       </div>
       <UnstakingCard v-if="a.unstaking" />
 
