@@ -16,8 +16,13 @@ export function freshAddress() {
   return ('NQ' + String(98 - r).padStart(2, '0') + body).replace(/(.{4})/g, '$1 ').trim()
 }
 
-/** The wallet the fake Nimiq Pay reports (default: a real mainnet address with history). */
-export async function setup(base, address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T') {
+/**
+ * `opts`: the wallet address the fake Nimiq Pay reports (default: a real mainnet
+ * address with history), its network ('mainnet' default) and its getBalance (Luna, default 0).
+ * A string is taken as the address.
+ */
+export async function setup(base, opts = {}) {
+  const { address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', network = 'mainnet', balanceLuna = 0 } = typeof opts === 'string' ? { address: opts } : opts
   const results = []
   const log = (name, ok, extra = '') => { results.push({ name, ok, extra }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`) }
 
@@ -30,18 +35,18 @@ export async function setup(base, address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 
     userAgent: 'Mozilla/5.0 (Linux; Android 16; Seeker Build/BP2A.250605.031; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/155.0.7290.88 Mobile Safari/537.36',
   })
   // Pretend to be inside Nimiq Pay, with dry run on and an empty cache.
-  await context.addInitScript((address) => {
+  await context.addInitScript(({ address, network, balanceLuna }) => {
     if (!sessionStorage.getItem('kb-e2e')) {
       sessionStorage.setItem('kb-e2e', '1')
       localStorage.clear()
       localStorage.setItem('kb:dryrun', JSON.stringify({ on: true, outcome: 'approve', baseBalanceLuna: 50000000, baseStaker: null, txs: [], kickbacks: [], releaseMs: 120000 }))
     }
-    window.nimiqPay = { language: 'en', network: 'mainnet' }
+    window.nimiqPay = { language: 'en', network }
     window.nimiq = {
       listAccounts: async () => [address],
-      getBalance: async () => 0,
+      getBalance: async () => balanceLuna,
     }
-  }, address)
+  }, { address, network, balanceLuna })
   // The sandboxed browser may not resolve DNS: relay every non-local request
   // (app host, Validators API, RPC) through Node so the app talks to the real services.
   await context.route(url => url.hostname !== 'localhost', async (route) => {
@@ -100,7 +105,10 @@ export async function setup(base, address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 
     await browser.close()
     process.exit(results.every(r => r.ok) ? 0 : 1)
   }
-  return { browser, page, cdp, log, results, hash, waitHash, state, tapText, hold, openDiagnostics, closeSheet, finish }
+  /** Every URL the page fetched outside localhost (to check which network it talked to). */
+  const requests = []
+  page.on('request', (r) => { const u = new URL(r.url()); if (u.hostname !== 'localhost') requests.push(r.method() + ' ' + u.origin + u.pathname) })
+  return { browser, context, page, cdp, log, results, requests, hash, waitHash, state, tapText, hold, openDiagnostics, closeSheet, finish }
 }
 
 /** Connect, pick a pool (Nimiq.Fun when offered), stake 100 NIM in dry run, reach Home. */

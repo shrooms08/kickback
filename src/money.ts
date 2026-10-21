@@ -28,6 +28,7 @@ import { span } from './lib/time'
 import { fxStep } from './lib/fx'
 import { prefGet, prefSet } from './lib/cache'
 import { isValidAddress } from './lib/address'
+import { isTestnet } from './lib/net'
 
 const NIM = (luna: number) => nim2(luna / 1e5)
 const me = () => useWallet().effectiveAddress
@@ -83,7 +84,8 @@ export async function stakeLive() {
   if (useOps().active.some(o => o.flow === 'stake')) return ui.showToast('Your stake is still confirming. Nothing else to do.')
   const pool = data.pool(flow.poolPick)
   // Never send with a placeholder: the delegation must be a real validator address.
-  if (!isValidAddress(pool.validator) || pool.payoutType !== 'direct') { ui.showToast('Pick a pool first.'); return go('pools') }
+  // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
+  if (!isValidAddress(pool.validator) || (pool.payoutType !== 'direct' && !isTestnet)) { ui.showToast('Pick a pool first.'); return go('pools') }
   const st = currentStaker()
   const isNew = !st || st.balance + st.inactiveBalance + st.retiredBalance === 0
   if (!isNew && !sameAddr(st!.delegation, pool.validator)) return ui.openSheet('switch')

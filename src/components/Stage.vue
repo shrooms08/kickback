@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
+import { isTestnet } from '../lib/net'
 import { useRoute } from 'vue-router'
 import TabBar from './TabBar.vue'
 import Banner from './Banner.vue'
@@ -138,13 +139,17 @@ const banner = computed(() => {
 // Dry run (simulated sends) uses the same strip when not previewing.
 const previewOn = computed(() => (wallet.isPreview || wallet.isDry) && !!nav.screen && !['welcome', 'browser', 'connecting'].includes(nav.screen))
 const previewText = computed(() => wallet.isPreview ? `Preview: ${addressShort(wallet.previewAddress)} (read only)` : 'Dry run: no real NIM moves')
+// Testnet: its own strip on every screen, above the preview / dry-run strip.
+const testnetOn = isTestnet
+const strips = computed(() => (testnetOn ? 1 : 0) + (previewOn.value ? 1 : 0))
+const stripsH = computed(() => strips.value === 2 ? 'var(--kb-preview-h) * 2' : 'var(--kb-preview-h)')
 const layerTop = computed(() => {
   const parts = ['var(--kb-safe-top)']
-  if (previewOn.value) parts.push('var(--kb-preview-h)')
+  if (strips.value) parts.push(stripsH.value)
   if (banner.value) parts.push('var(--kb-banner-push)')
   return parts.length > 1 ? `calc(${parts.join(' + ')})` : parts[0]
 })
-const bannerTop = computed(() => previewOn.value ? 'calc(var(--kb-safe-top) + var(--kb-preview-h) + 4px)' : 'calc(var(--kb-safe-top) + 4px)')
+const bannerTop = computed(() => strips.value ? `calc(var(--kb-safe-top) + ${stripsH.value} + 4px)` : 'calc(var(--kb-safe-top) + 4px)')
 
 // ---------- layer placement ----------
 function zOf(n: ScreenName): number {
@@ -404,7 +409,8 @@ function modalDown(e: PointerEvent) {
       <div :ref="el => setDim(l.n, el)" class="dim" :style="{ zIndex: l.z + 2, transform: l.tf, borderRadius: l.r, opacity: l.dim }" />
     </template>
 
-    <div v-if="previewOn" class="preview" :class="{ dry: !wallet.isPreview }" role="status"><span class="pdot" />{{ previewText }}</div>
+    <div v-if="testnetOn" class="preview testnet" role="status" data-kb="testnet-strip"><span class="pdot" />Testnet: test NIM only</div>
+    <div v-if="previewOn" class="preview" :class="{ dry: !wallet.isPreview }" :style="testnetOn ? { top: 'calc(var(--kb-safe-top) + var(--kb-preview-h))' } : undefined" role="status"><span class="pdot" />{{ previewText }}</div>
     <Banner v-if="banner" :kind="banner.kind" :text="banner.text" :label="banner.label" :style="{ top: bannerTop }" @act="banner.act()" />
 
     <div v-if="chrome" :ref="setChrome" class="chrome" :style="{ zIndex: chrome.z, transform: chrome.tf, borderRadius: chrome.r }">
@@ -438,4 +444,6 @@ function modalDown(e: PointerEvent) {
 .pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--kb-second); }
 .preview.dry { color: var(--kb-lime); }
 .preview.dry .pdot { background: var(--kb-lime); }
+.preview.testnet { color: var(--kb-third); background: color-mix(in srgb, var(--kb-third) 14%, var(--kb-raised)); }
+.preview.testnet .pdot { background: var(--kb-third); }
 </style>

@@ -74,7 +74,8 @@ export function runAmount(readyLuna: number, balanceLuna: number): { amount: num
 
 // ---------- ready-to-share ledger ----------
 
-export interface KickbackLike { at: number, luna: number, restaked?: boolean, dry?: boolean }
+/** `dry`: a dry-run fake. `manual`: a testnet test kickback marked in Diagnostics. Both count once a plan exists. */
+export interface KickbackLike { at: number, luna: number, restaked?: boolean, dry?: boolean, manual?: boolean }
 /** One shared (or kept) amount. `dry` entries come from dry-run runs and never count against real kickbacks. */
 export interface LedgerEntry { luna: number, at: number, hash?: string, dry?: boolean }
 
@@ -87,7 +88,7 @@ export interface LedgerEntry { luna: number, at: number, hash?: string, dry?: bo
  */
 export function readyLuna(kickbacks: readonly KickbackLike[], planStartedAt: number | null, ledger: readonly LedgerEntry[], inFlightLuna = 0): number {
   if (planStartedAt == null) return 0
-  const received = kickbacks.filter(k => !k.restaked && (k.dry || k.at >= planStartedAt)).reduce((a, k) => a + k.luna, 0)
+  const received = kickbacks.filter(k => !k.restaked && (k.dry || k.manual || k.at >= planStartedAt)).reduce((a, k) => a + k.luna, 0)
   const done = ledger.reduce((a, e) => a + e.luna, 0)
   return Math.max(0, received - done - inFlightLuna)
 }

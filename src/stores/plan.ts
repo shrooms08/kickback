@@ -18,7 +18,12 @@ interface Persisted {
   savedRecipient: string | null
   planStartedAt: number | null
   ledger: LedgerEntry[]
+  /** Testnet only: test kickbacks marked in Diagnostics. */
+  marked?: MarkedKickback[]
 }
+
+/** A testnet test kickback: real testnet NIM already in the wallet, marked as ready to share. */
+export interface MarkedKickback { at: number, luna: number }
 
 interface Backup { contacts: Contact[], recipient: string | null, savedRecipient: string | null, saved: Split, pct: Split }
 
@@ -39,6 +44,8 @@ export const usePlan = defineStore('plan', {
     planStartedAt: null as number | null,
     /** Amounts already shared (successful steps), for Ready to share. */
     ledger: [] as LedgerEntry[],
+    /** Testnet only: test kickbacks marked in Diagnostics (plans are stored per network). */
+    marked: [] as MarkedKickback[],
     contacts: DEFAULT_CONTACTS.slice() as Contact[],
     saved: DEFAULT_PLAN.slice() as Split,
     savedRecipient: 'mom' as string | null,
@@ -90,12 +97,12 @@ export const usePlan = defineStore('plan', {
       catch { p = null }
       const d: Persisted = p ?? { contacts: [], saved: NO_CONTACT_PLAN.slice() as Split, savedRecipient: null, planStartedAt: null, ledger: [] }
       lastWritten = ''
-      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
+      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
       this.autoPersist()
     },
     persist() {
       if (!this.owner) return
-      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger }
+      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, ...(this.marked.length ? { marked: this.marked } : {}) }
       const json = JSON.stringify(d)
       if (json === lastWritten) return
       lastWritten = json
@@ -111,6 +118,12 @@ export const usePlan = defineStore('plan', {
     recordShared(luna: number, hash?: string, dry = false) {
       if (luna <= 0) return
       this.ledger.push({ luna, at: Date.now(), hash, ...(dry ? { dry: true } : {}) })
+      this.persist()
+    },
+    /** Testnet: mark real NIM already in the wallet as a ready-to-share test kickback. */
+    markTestKickback(luna: number) {
+      const last = this.marked[this.marked.length - 1]?.at ?? 0
+      this.marked.push({ at: Math.max(Date.now(), last + 1), luna })
       this.persist()
     },
     /** Reset dry run: forget what dry-run runs shared. */

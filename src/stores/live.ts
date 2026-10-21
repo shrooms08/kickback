@@ -11,14 +11,15 @@ import { router } from '../router'
 import type { Pool } from '../services/mock'
 import { rpc } from '../services/rpc'
 import {
-  STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, firstKickbackAt, getAccountBalance, getStaker, getValidator, learnProbe, norm,
-  payoutClock, poolStats, sameAddr, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
+  STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, firstKickbackAt, getAccountBalance, getActiveValidators, getStaker, getValidator,
+  learnProbe, norm, payoutClock, poolStats, sameAddr, spaced, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
 } from '../services/chain'
 import type { EpochClock, History, Kickback, PoolStats, Staker, Tx } from '../services/chain'
 import { directValidators, grossStakingApy, knownValidators, status, supply } from '../services/validators'
 import type { ApiValidator } from '../services/validators'
 import { cacheGet, cacheSet, pruneCache } from '../lib/cache'
 import { ledgerFor, readyLuna } from '../lib/money'
+import { isTestnet } from '../lib/net'
 import { ago, clockOrDay, duration, hhmm, now, startClock } from '../lib/time'
 
 const H = 3600e3
@@ -98,6 +99,13 @@ function toPool(v: ApiValidator, reward: string, stats: PoolStats | null, gross:
   }
 }
 
+const PAYS: Record<string, string> = { direct: 'Direct payouts', restake: 'Into your stake', none: 'No payouts' }
+
+/** Same card on testnet, labelled as a testnet validator; no payout check, so no last-paid line. */
+function testnetPool(p: Pool, v: ApiValidator): Pool {
+  return { ...p, badge: 'Testnet validator', pays: PAYS[v.payoutType] || 'Unknown', fee: v.isListed ? p.fee : 'Unknown', lastPaid: 'Payouts not checked on testnet', lastPaidAt: null, intervalH: null }
+}
+
 /** A pool we only know by address so far (before the Validators API answers). */
 function placeholderPool(validator: string, reward: string, prev?: Pool): Pool {
   return prev ?? { id: validator, name: 'Your pool', validator, reward, fee: '', feeRate: 0, pays: '', trust: 0, lastPaid: '', payoutType: 'unknown' }
@@ -113,6 +121,28 @@ function incomingOf(address: string, txs: Tx[]): Incoming[] {
     out.push({ h: t.hash, t: t.timestamp, f: t.from, v: t.value, r: !toMe })
   }
   return out
+}
+
+/** Reward address per validator, from the testnet active-validator read. */
+const testnetRewards: Record<string, string> = {}
+
+/**
+ * Testnet pool list: every active, unjailed validator from RPC getActiveValidators,
+ * named from the testnet Validators API when it is listed (else a short address).
+ * There are no direct-payout pools on testnet to filter for.
+ */
+async function testnetValidators(): Promise<{ value: ApiValidator[], at: number, stale: boolean }> {
+  const [act, known] = await Promise.all([getActiveValidators(), knownValidators().then(r => r.value).catch(() => [] as ApiValidator[])])
+  const value = (act.value || [])
+    .filter(a => !a.retired && a.inactivityFlag == null && a.jailedFrom == null)
+    .map((a): ApiValidator => {
+      testnetRewards[norm(a.address)] = a.rewardAddress
+      const k = known.find(x => sameAddr(x.address, a.address))
+      if (k) return { ...k, balance: a.balance, stakers: a.numStakers }
+      const g = spaced(a.address).split(' ')
+      return { address: a.address, name: `${g[0]} ${g[1]} … ${g[g.length - 1]}`, fee: 0, payoutType: 'unknown', payoutSchedule: '', isListed: false, score: null, scoreStatus: 'no_score', balance: a.balance, stakers: a.numStakers, website: null }
+    })
+  return { value, at: act.at, stale: act.stale }
 }
 
 export const useLive = defineStore('live', {
@@ -278,28 +308,34 @@ export const useLive = defineStore('live', {
     async phaseB(gen: number, history: History) {
       const data = useData()
       if (!data.livePools.length) data.poolsState = 'loading'
-      const api = await Promise.allSettled([directValidators(), status(), supply()])
+      const api = await Promise.allSettled([isTestnet ? testnetValidators() : directValidators(), status(), supply()])
       if (gen !== generation || !snap) return
       const direct = api[0].status === 'fulfilled' ? api[0].value.value : []
       const st = api[1].status === 'fulfilled' ? api[1].value.value : null
       const gross = api[2].status === 'fulfilled' ? grossStakingApy(api[2].value.value) : snap.grossApy
       const elected = new Set((st?.elected || []).map(norm))
-
-      // Candidate pools: direct payout, current score, elected this epoch, healthy on chain.
       const notes: string[] = []
-      const candidates = direct.filter((v) => {
-        if (v.payoutType !== 'direct') return false
-        if (st && !elected.has(norm(v.address))) { notes.push(`${v.name}: not elected`); return false }
-        if (v.scoreStatus !== 'current') { notes.push(`${v.name}: score ${v.scoreStatus}`); return false }
-        return true
-      })
-      const infos = await Promise.all(candidates.map(v => getValidator(v.address).then(r => r.value).catch(() => null)))
-      if (gen !== generation || !snap) return
-      const healthy = candidates.map((v, i) => ({ v, info: infos[i] })).filter(({ v, info }) => {
-        if (!info) { notes.push(`${v.name}: validator lookup failed`); return false }
-        if (info.inactivityFlag != null || info.retired || info.jailedFrom != null) { notes.push(`${v.name}: inactive on chain`); return false }
-        return true
-      })
+      let healthy: Array<{ v: ApiValidator, info: { rewardAddress: string } | null }>
+      if (isTestnet) {
+        // Testnet: every active validator, with its reward address from the same RPC read.
+        healthy = direct.map(v => ({ v, info: { rewardAddress: testnetRewards[norm(v.address)] || v.address } }))
+      }
+      else {
+        // Candidate pools: direct payout, current score, elected this epoch, healthy on chain.
+        const candidates = direct.filter((v) => {
+          if (v.payoutType !== 'direct') return false
+          if (st && !elected.has(norm(v.address))) { notes.push(`${v.name}: not elected`); return false }
+          if (v.scoreStatus !== 'current') { notes.push(`${v.name}: score ${v.scoreStatus}`); return false }
+          return true
+        })
+        const infos = await Promise.all(candidates.map(v => getValidator(v.address).then(r => r.value).catch(() => null)))
+        if (gen !== generation || !snap) return
+        healthy = candidates.map((v, i) => ({ v, info: infos[i] })).filter(({ v, info }) => {
+          if (!info) { notes.push(`${v.name}: validator lookup failed`); return false }
+          if (info.inactivityFlag != null || info.retired || info.jailedFrom != null) { notes.push(`${v.name}: inactive on chain`); return false }
+          return true
+        })
+      }
 
       const s = snap
       const staker = s.staker
@@ -313,6 +349,7 @@ export const useLive = defineStore('live', {
         if (v) {
           if (v.payoutType === 'direct' && reward && !userStats) userStats = await poolStats(reward).catch(() => null)
           userPool = toPool(v, reward, v.payoutType === 'direct' ? userStats : null, gross)
+          if (isTestnet) userPool = testnetPool(userPool, v)
         }
       }
       const kickbacks = findKickbacks(s.address, history.txs, rewards)
@@ -335,10 +372,10 @@ export const useLive = defineStore('live', {
         })
         // A failed check keeps the last known stats instead of blanking the card.
         .map(({ x, s }) => s ? toPool(x.v, x.reward, s, gross) : (snap!.pools.find(p => p.id === x.v.address) ?? toPool(x.v, x.reward, null, gross)))
-        .map((p): Pool => ({ ...p, badge: undefined }))
-        .sort((a, b) => a.feeRate - b.feeRate || b.trust - a.trust)
+        .map((p): Pool => isTestnet ? testnetPool(p, list.find(x => x.v.address === p.id)!.v) : { ...p, badge: undefined })
+        .sort((a, b) => Number(a.payoutType === 'unknown') - Number(b.payoutType === 'unknown') || a.feeRate - b.feeRate || b.trust - a.trust)
       const minFee = Math.min(...pools.map(p => p.feeRate))
-      if (pools.filter(p => p.feeRate === minFee).length === 1) pools.find(p => p.feeRate === minFee)!.badge = 'Lowest fee'
+      if (!isTestnet && pools.filter(p => p.feeRate === minFee).length === 1) pools.find(p => p.feeRate === minFee)!.badge = 'Lowest fee'
       snap.pools = pools
       pools.forEach((p) => { snap!.known[p.id] = { ...p, reward: p.reward } })
       if (hidden.length) snap.poolsNote = [snap.poolsNote, ...hidden].filter(Boolean).join('; ')
@@ -430,6 +467,8 @@ export const useLive = defineStore('live', {
       for (const k of snap.kickbacks) byHash.set(k.hash, k)
       if (full) for (const i of full.items) if (rewards.has(norm(i.f)) && !byHash.has(i.h)) byHash.set(i.h, { hash: i.h, at: i.t, luna: i.v, from: i.f, restaked: i.r })
       if (dry.on && !wallet.isPreview) dry.kickbacks.forEach((k, i) => byHash.set(`dry${i}:${k.at}`, { hash: `dry${i}:${k.at}`, at: k.at, luna: k.luna, from: snap!.userPool?.reward || 'Dry run', restaked: false, dry: true }))
+      // Testnet test kickbacks are real NIM in the wallet, so they count only with dry run off. Never on mainnet.
+      if (isTestnet && !dry.on && !wallet.isPreview) usePlan().marked.forEach((k, i) => byHash.set(`test${i}:${k.at}`, { hash: `test${i}:${k.at}`, at: k.at, luna: k.luna, from: 'Test kickback', restaked: false, manual: true }))
       const list = [...byHash.values()].sort((a, b) => b.at - a.at)
       const complete = !!full?.complete
       const earnedLuna = (complete ? list : list.filter(k => k.at >= Date.now() - 30 * 24 * H)).reduce((a, k) => a + k.luna, 0)
@@ -454,7 +493,7 @@ export const useLive = defineStore('live', {
       const inFlight = ops.active.filter(o => o.flow === 'run' && o.dry === isDry).reduce((a, o) => a + o.req.value, 0)
       const ready = readyLuna(kick, plan.planStartedAt, ledgerFor(plan.ledger, isDry), inFlight)
       const since = Math.max(plan.planStartedAt ?? Infinity, plan.lastRunAtFor(isDry) ?? 0)
-      const waiting = plan.planStartedAt == null ? 0 : kick.filter(k => !k.restaked && (k.dry ? k.at >= (plan.lastRunAtFor(true) ?? 0) : k.at >= since)).length
+      const waiting = plan.planStartedAt == null ? 0 : kick.filter(k => !k.restaked && (k.dry ? k.at >= (plan.lastRunAtFor(true) ?? 0) : k.manual ? k.at >= (plan.lastRunAtFor(false) ?? 0) : k.at >= since)).length
 
       const stats = snap.userStats
       const own = snap.userPool?.reward ? kick.filter(k => sameAddr(k.from, snap!.userPool!.reward)) : []
@@ -573,7 +612,7 @@ export const useLive = defineStore('live', {
 export function wireLiveClock() {
   const live = useLive(), plan = usePlan(), dry = useDry(), ops = useOps()
   watch(now, () => live.derive())
-  watch(() => [plan.ledger.length, plan.planStartedAt, ops.active.length, dry.tick, dry.on, dry.kickbacks.length, dry.releaseMs], () => live.derive())
+  watch(() => [plan.ledger.length, plan.planStartedAt, plan.marked.length, ops.active.length, dry.tick, dry.on, dry.kickbacks.length, dry.releaseMs], () => live.derive())
   onSettled(() => { if (live.active) setTimeout(() => live.refresh({ force: true }), 1500) })
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && live.active && Date.now() - live.lastOkAt > 60e3) live.refresh()

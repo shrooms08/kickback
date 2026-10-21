@@ -2,6 +2,7 @@
 import { rpc, rpcPeek } from './rpc'
 import type { Result } from './rpc'
 import { prefGet, prefSet } from '../lib/cache'
+import { isTestnet, net } from '../lib/net'
 
 export const COINBASE = 'NQ81 C01N BASE 0000 0000 0000 0000 0000 0000'
 export const STAKING_CONTRACT = 'NQ77 0000 0000 0000 0000 0000 0000 0000 0001'
@@ -44,6 +45,21 @@ export interface Tx {
 
 // ---------- single reads ----------
 
+export interface ActiveValidator {
+  address: string
+  rewardAddress: string
+  balance: number
+  numStakers: number
+  inactivityFlag: number | null
+  retired: boolean
+  jailedFrom: number | null
+}
+
+/** Every validator elected this epoch (testnet pool list). */
+export function getActiveValidators(ttl = 10 * 60e3): Promise<Result<ActiveValidator[]>> {
+  return rpc<ActiveValidator[]>('getActiveValidators', [], { ttl })
+}
+
 export function getStaker(address: string, ttl = 60e3): Promise<Result<Staker | null>> {
   return rpc<Staker | null>('getStakerByAddress', [address], { ttl })
 }
@@ -79,7 +95,8 @@ export async function unstakeReadyAt(inactiveFrom: number): Promise<{ readyAt: n
 // about 11.94 h, not 12 h. Timing is measured from real election blocks: a few
 // minutes of drift matters, because pools pay a couple of minutes after each
 // election block (see docs/staking-lifecycle.md).
-export const GENESIS_BLOCK = 3_456_000
+/** Mainnet 3,456,000; testnet 3,032,010 (getPolicyConstants genesisBlockNumber). */
+export const GENESIS_BLOCK = net.genesisBlock
 export const BLOCKS_PER_EPOCH = 43_200
 
 export function nextElectionBlock(head: number): number {
@@ -188,6 +205,8 @@ export interface Kickback {
   restaked: boolean
   /** A dry-run fake. */
   dry?: boolean
+  /** A testnet test kickback (marked in Diagnostics, backed by real testnet NIM in the wallet). */
+  manual?: boolean
 }
 
 /** Incoming payouts to `address` from any of `rewardAddresses`. */
@@ -311,8 +330,14 @@ async function fromScan(reward: string): Promise<PoolStats> {
   return { alive: true, lastPaidAt: batches[0], batches, intervalH: medianGapHours(batches), source: 'scan', checkedAt: at }
 }
 
-/** Payout health of a pool, from probes first, then a scan. */
+/**
+ * Payout health of a pool, from probes first, then a scan. On testnet there
+ * is no payout check: reward addresses are the validators themselves (flooded
+ * with block rewards, so a scan costs up to 50 units each) and no listed pool
+ * pays to wallets, so every pool counts as alive with no schedule.
+ */
 export async function poolStats(reward: string): Promise<PoolStats> {
+  if (isTestnet) return { alive: true, lastPaidAt: null, batches: [], intervalH: null, source: 'none', checkedAt: Date.now() }
   const probes = [...learnedProbes(reward), ...(SEED_PROBES[norm(reward)] || [])]
   for (const p of probes.slice(0, 3)) {
     try {

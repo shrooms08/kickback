@@ -1,4 +1,5 @@
-// JSON-RPC client for the public mainnet node (rpc.nimiqwatch.com).
+// JSON-RPC client for the public node of the current network (rpc.nimiqwatch.com,
+// or rpc.testnet.nimiqwatch.com on testnet; see src/lib/net.ts).
 // The node allows about 20 units per 10 seconds per IP; history requests with
 // max > 100 cost 5 units, everything else 1. This client:
 //  - spends at most 16 units per 10s (token bucket, FIFO), and also pauses when
@@ -9,8 +10,9 @@
 //  - caches results (memory + localStorage, timestamped) for stale-while-revalidate
 import { reactive } from 'vue'
 import { cacheGet, cacheSet, ageMs } from '../lib/cache'
+import { net } from '../lib/net'
 
-export const RPC_URL = 'https://rpc.nimiqwatch.com'
+export const RPC_URL = net.rpcUrl
 const BUDGET = 16
 const WINDOW_MS = 10_000
 const TIMEOUT_MS = 8_000

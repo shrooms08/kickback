@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
+import { isTestnet } from '../lib/net'
 import StepHeader from '../components/StepHeader.vue'
 import PoolCard from '../components/PoolCard.vue'
 import { useFlow } from '../stores/flow'
@@ -47,7 +48,7 @@ onMounted(() => {
       <StepHeader :step="1" :label="switchMode ? 'Switch pool' : 'Step 1 of 2'" @back="poolsBack" />
       <div class="intro">
         <h1 class="kb-h1">Pick a pool</h1>
-        <p class="kb-body">These pools pay rewards straight to your wallet.</p>
+        <p class="kb-body">{{ isTestnet ? 'Every active testnet validator. Testnet pools rarely pay kickbacks; use a test kickback in Diagnostics.' : 'These pools pay rewards straight to your wallet.' }}</p>
       </div>
       <template v-if="loading">
         <div class="kb-skel" style="height: 236px; border-radius: 28px" />

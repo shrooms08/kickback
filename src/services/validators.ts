@@ -1,9 +1,10 @@
-// Nimiq Validators API (mainnet). Responses carry base64 logos (the direct
+// Nimiq Validators API (mainnet, or the testnet deployment on testnet). Responses carry base64 logos (the direct
 // list is ~380 KB, the known list ~1.3 MB), so results are trimmed to the
 // fields Kickback uses before they are cached.
 import { cacheGet, cacheSet, ageMs } from '../lib/cache'
+import { net } from '../lib/net'
 
-export const VALIDATORS_API = 'https://validators-api-main.je-cf9.workers.dev'
+export const VALIDATORS_API = net.validatorsApiUrl
 
 export interface ApiValidator {
   address: string

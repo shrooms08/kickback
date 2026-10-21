@@ -1,9 +1,12 @@
 // Tiny two-level cache: memory plus localStorage, every entry timestamped.
 // localStorage can be missing or full inside a WebView, so every access is guarded.
+// Every key is namespaced by network (testnet keys get a 't:' prefix; mainnet
+// keys are unchanged), so caches, plans, contacts, ledgers and ops never mix.
+import { NS } from './net'
 
 export interface Entry<T> { t: number, v: T }
 
-const PREFIX = 'kb:c:'
+const PREFIX = `kb:${NS}c:`
 const mem = new Map<string, Entry<unknown>>()
 
 export function cacheGet<T>(key: string): Entry<T> | null {
@@ -58,13 +61,13 @@ export function pruneCache(fraction?: number) {
 
 /** Small persisted settings (not cache entries). */
 export function prefGet(key: string): string | null {
-  try { return localStorage.getItem('kb:' + key) }
+  try { return localStorage.getItem(`kb:${NS}` + key) }
   catch { return null }
 }
 export function prefSet(key: string, value: string | null) {
   try {
-    if (value === null) localStorage.removeItem('kb:' + key)
-    else localStorage.setItem('kb:' + key, value)
+    if (value === null) localStorage.removeItem(`kb:${NS}` + key)
+    else localStorage.setItem(`kb:${NS}` + key, value)
   }
   catch { /* ignore */ }
 }

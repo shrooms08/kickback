@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logMoney } from '../lib/moneylog'
 import { prefGet, prefSet } from '../lib/cache'
 import { findOnChain, send, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
@@ -70,6 +71,7 @@ export const useOps = defineStore('ops', {
       if (!op) return
       Object.assign(op, p)
       this.save()
+      if (!op.dry) logMoney(op)
       if (p.phase === 'confirmed' || p.phase === 'failed') listeners.forEach(fn => fn(op))
     },
 
@@ -78,6 +80,7 @@ export const useOps = defineStore('ops', {
       const op: Op = { id: 'op' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), flow, req, phase: 'approving', address, dry: useDry().on, startedAt: Date.now(), meta }
       this.ops.push(op)
       this.save()
+      if (!op.dry) logMoney(op)
       running.add(op.id)
       try {
         const r = await send(req)

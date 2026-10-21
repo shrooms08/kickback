@@ -21,7 +21,9 @@ import { useNav } from '../../stores/nav'
 import { usePlan } from '../../stores/plan'
 import { clearFinished } from '../../money'
 import type { DryOutcome } from '../../stores/dry'
-import { parseNimInput } from '../../lib/money'
+import { FEE_RESERVE_LUNA, parseNimInput, spendable } from '../../lib/money'
+import { isTestnet, net } from '../../lib/net'
+import { moneyLine, moneylog } from '../../lib/moneylog'
 import { nim2 } from '../../lib/format'
 
 // Hidden diagnostics: what the SDK and the RPC actually returned.
@@ -51,6 +53,32 @@ function addDryKickback() {
   dryBal.value = nim2(dry.chain.balanceLuna / 1e5)
   live.derive()
   ui.showToast(plan.planStartedAt == null ? 'Saved. It will be ready to share once you save a plan' : `Dry run: +${nim2(l / 1e5).replace(/\.00$/, '')} NIM kickback`)
+}
+// Testnet only: mark real testnet NIM already in the wallet as a ready-to-share test kickback,
+// so Run my plan sends real testnet transactions for it. Never shown or counted on mainnet.
+const testKb = ref('1')
+const testErr = ref('')
+const testBusy = ref(false)
+async function markTestKickback() {
+  testErr.value = ''
+  if (!isTestnet) return
+  if (dry.on) { testErr.value = 'Turn dry run off first: test kickbacks are backed by real testnet NIM.'; return }
+  if (wallet.isPreview) { testErr.value = 'Preview is read only.'; return }
+  const luna = parseNimInput(testKb.value)
+  if (!(luna > 0)) { testErr.value = 'Enter an amount in NIM.'; return }
+  testBusy.value = true
+  let bal: number
+  try { bal = await wallet.freshBalance() }
+  catch (e) { testErr.value = `Could not read your balance: ${(e as Error).message}`; return }
+  finally { testBusy.value = false }
+  const room = spendable(bal) - account.readyLuna
+  if (luna > room) {
+    testErr.value = `At most ${nim2(Math.max(0, room) / 1e5)} NIM: your wallet has ${nim2(bal / 1e5)} NIM, keeps ${nim2(FEE_RESERVE_LUNA / 1e5)} NIM for fees${account.readyLuna ? ` and ${nim2(account.readyLuna / 1e5)} NIM is already ready to share` : ''}.`
+    return
+  }
+  plan.markTestKickback(luna)
+  live.derive()
+  ui.showToast(plan.planStartedAt == null ? 'Marked. It will be ready to share once you save a plan' : `Testnet: +${nim2(luna / 1e5).replace(/\.00$/, '')} NIM test kickback`)
 }
 // Reset also forgets what dry-run runs shared, so old dry shares never eat new fake kickbacks.
 function resetDry() {
@@ -107,6 +135,10 @@ const lines = computed(() => {
     ['window.nimiqPay', `at boot: ${diag.hostContextAtBoot ? 'yes' : 'no'} · now: ${window.nimiqPay ? 'yes' : 'no'}`],
     ['window.nimiq', `at boot: ${diag.nimiqAtBoot ? 'yes' : 'no'} · now: ${window.nimiq ? 'yes' : 'no'}`],
     ['Host network / language', `${host.network || 'n/a'} / ${host.language || 'n/a'}`],
+    ['Network', `${net.network} · from ${net.source} · network id ${net.networkId} · genesis block ${net.genesisBlock}`],
+    ['RPC URL', net.rpcUrl],
+    ['Validators API URL', net.validatorsApiUrl],
+    ['Explorer', net.explorerTxUrl('<hash>')],
     ['Detection', `${diag.detectMethod || 'n/a'} · ${ms(diag.detectMs)}`],
     ['init() resolved after', ms(diag.initMs)],
     ['getBalance available', window.nimiq ? (typeof (window.nimiq as unknown as Record<string, unknown>).getBalance === 'function' ? 'yes' : 'NO (update Nimiq Pay)') : 'n/a'],
@@ -136,7 +168,7 @@ const lines = computed(() => {
     if (data.poolsNote) out.push(['Pools hidden', data.poolsNote])
     out.push(['Est. staking reward', data.grossApy != null ? `${(data.grossApy * 100).toFixed(2)}% gross (before pool fee)` : 'n/a'])
   }
-  out.push(['RPC (raw lines below)', `rpc.nimiqwatch.com · ${ms(diag.rpcMs)}`])
+  out.push(['RPC (raw lines below)', `${net.rpcUrl.replace('https://', '')} · ${ms(diag.rpcMs)}`])
   out.push(['getStakerByAddress', diag.stakerRaw || (diag.rpcLoading ? 'loading…' : 'not called')])
   out.push(['getAccountByAddress', diag.accountRaw || (diag.rpcLoading ? 'loading…' : 'not called')])
   if (!diag.errors.length) out.push(['Errors', 'none'])
@@ -160,6 +192,12 @@ const lines = computed(() => {
   const recent = [...ops.ops].reverse().slice(0, 8)
   if (!recent.length) out.push(['Money actions', 'none'])
   recent.forEach((o, i) => out.push([`Money action ${i + 1}${o.dry ? ' (dry run)' : ''}`, `${o.flow} · ${o.req.kind} ${o.req.value} Luna${o.req.recipient ? ` to ${o.req.recipient}` : ''}${o.req.delegation ? ` to ${o.req.delegation}` : ''}${o.req.newDelegation ? ` to ${o.req.newDelegation}` : ''} · ${o.phase}${o.slow ? ' (slow)' : ''} · ${new Date(o.startedAt).toLocaleTimeString('en-GB')}${o.hash ? ` · hash ${o.hash}` : ''}${o.error ? ` · ${o.error}` : ''}`]))
+  // Real sends only (never dry run): network, action, amount, target, hash, confirmation
+  // time, and the transaction as read back from the RPC (types and first data byte).
+  const log = [...moneylog.entries].reverse()
+  if (!log.length) out.push(['Money log (real sends)', 'none yet'])
+  log.forEach((e, i) => out.push([`Money log ${i + 1}`, moneyLine(e)]))
+  if (isTestnet) out.push(['Test kickbacks', plan.marked.length ? plan.marked.map(k => `${nim2(k.luna / 1e5)} NIM at ${new Date(k.at).toLocaleTimeString('en-GB')}`).join(' · ') : 'none'])
   out.push(['User agent', navigator.userAgent])
   return out
 })
@@ -202,6 +240,15 @@ async function again() {
       </div>
     </template>
   </div>
+  <div v-if="isTestnet" class="dry test" data-kb="test-kickback">
+    <div class="kb-eyebrow">Testnet: test kickback</div>
+    <p class="dnote">Marks real testnet NIM already in your wallet as ready to share, so Run my plan sends real testnet transactions for it. Dry run must be off.</p>
+    <div class="prow3">
+      <input v-model="testKb" class="pin" inputmode="decimal" aria-label="Test kickback in NIM">
+      <button class="kb-btn pbtn" :disabled="testBusy || dry.on" @click="markTestKickback">Mark test kickback</button>
+    </div>
+    <div v-if="testErr" class="perr">{{ testErr }}</div>
+  </div>
   <div class="preview">
     <label class="kb-eyebrow" for="kb-preview">Preview address</label>
     <input
@@ -235,6 +282,7 @@ async function again() {
 .v { font: 500 12px/1.4 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--kb-text); word-break: break-all; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
 .preview { display: flex; flex-direction: column; gap: 8px; }
 .dry { display: flex; flex-direction: column; gap: 8px; border-radius: 16px; border: 1px solid var(--kb-line); padding: 12px; }
+.dry.test { border-color: var(--kb-third); }
 .drow { display: flex; justify-content: space-between; align-items: center; }
 .dnote { font-size: 12px; line-height: 1.4; color: var(--kb-text-2); }
 .tog { width: 52px; height: 30px; border-radius: 999px; border: 1px solid var(--kb-line); background: var(--kb-bg); position: relative; cursor: pointer; padding: 0; }
