@@ -1,0 +1,84 @@
+{
+  "name": "ObsidianStake",
+  "addr": "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV",
+  "pages": 14,
+  "txsScanned": 7000,
+  "oldestScanned": "2026-10-17T05:23:24.845Z",
+  "coinbaseIncoming": 5824,
+  "outgoing": 1176,
+  "runs": [
+    {
+      "at": "2026-10-21T00:00:13.273Z",
+      "txs": 149,
+      "totalNim": 58511.78,
+      "sampleHash": "83ed6076394015642f74c314d5678890a028cf381a52ce58304279dad4a72145",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 205.74176
+    },
+    {
+      "at": "2026-10-20T12:00:11.935Z",
+      "txs": 144,
+      "totalNim": 52666.91,
+      "sampleHash": "f57a6fcd0842490faf92cf3fcb6dae9b9954d65e23b589383fd29a024ec39542",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 224.6601
+    },
+    {
+      "at": "2026-10-20T00:00:29.135Z",
+      "txs": 150,
+      "totalNim": 61128.52,
+      "sampleHash": "cf95c1cf650720ee3daa9c821bf0b746017ae1a97cbc308b14de06e83e46ba17",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 218.35698
+    },
+    {
+      "at": "2026-10-19T12:00:10.544Z",
+      "txs": 144,
+      "totalNim": 46208.1,
+      "sampleHash": "8699e0e62f45ca3ddf0fe76376687015830dd84093de41c17548514eb0a7f1fd",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 197.12027
+    },
+    {
+      "at": "2026-10-19T00:00:04.306Z",
+      "txs": 151,
+      "totalNim": 63646,
+      "sampleHash": "24ebb5f2800fd298934f2e1adc6e4be6d86e42eaafff8ba43ad997e10425e34f",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 212.09542
+    },
+    {
+      "at": "2026-10-18T12:00:04.319Z",
+      "txs": 144,
+      "totalNim": 49009.11,
+      "sampleHash": "18dc61bd7d523a5fa1e21a765972fe1ba6cf4f0fa891d37576bb78c339a5c709",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 209.076
+    },
+    {
+      "at": "2026-10-18T00:00:05.011Z",
+      "txs": 150,
+      "totalNim": 45321.06,
+      "sampleHash": "30fb0eeaa073001f4af221b982253e42ca1862c7e8371f50a3e6022042420585",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 154.86361
+    },
+    {
+      "at": "2026-10-17T12:00:18.945Z",
+      "txs": 144,
+      "totalNim": 52068.28,
+      "sampleHash": "25e30b76b583421322174753f0a89e70185fa7be6e19732a4999a959265d0eb1",
+      "sampleTo": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "sampleNim": 222.13637
+    }
+  ],
+  "gapsHours": [
+    12,
+    12,
+    12.01,
+    12,
+    12,
+    12,
+    12
+  ]
+}

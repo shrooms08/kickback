@@ -1,0 +1,135 @@
+{
+  "Nimiq.Fun": {
+    "payoutAddress": "NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717",
+    "fetched": 500,
+    "oldestFetched": "2026-10-20T22:22:24.353Z",
+    "outgoing": 38,
+    "incoming": 462,
+    "incomingSenders": [
+      "NQ81 C01N BASE 0000 0000 0000 0000 0000 0000"
+    ],
+    "latestPayout": {
+      "iso": "2026-10-21T02:30:02.895Z",
+      "hash": "bd7bfb209e6161fb372d96715d79207b06ef8dba847d61e060a9ca413e261a59",
+      "to": "NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E",
+      "nim": 10.6036,
+      "fee": 0,
+      "block": 64757128,
+      "data": "",
+      "senderData": ""
+    },
+    "payoutRuns": 1,
+    "runSizes": [
+      38
+    ],
+    "runTimes": [
+      "2026-10-21T02:30:02.895Z"
+    ],
+    "medianGapHours": null,
+    "gapsHours": [],
+    "distinctRecipients": 32,
+    "amountsNim": [
+      10.6036,
+      0.30137,
+      15.89885,
+      117.06953,
+      6.99203,
+      0.4868,
+      217.69726,
+      2.87716
+    ]
+  },
+  "ObsidianStake": {
+    "payoutAddress": "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV",
+    "fetched": 500,
+    "oldestFetched": "2026-10-21T00:00:10.274Z",
+    "outgoing": 137,
+    "incoming": 363,
+    "incomingSenders": [
+      "NQ81 C01N BASE 0000 0000 0000 0000 0000 0000"
+    ],
+    "latestPayout": {
+      "iso": "2026-10-21T00:00:13.273Z",
+      "hash": "83ed6076394015642f74c314d5678890a028cf381a52ce58304279dad4a72145",
+      "to": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+      "nim": 205.74176,
+      "fee": 0,
+      "block": 64748106,
+      "data": "",
+      "senderData": ""
+    },
+    "payoutRuns": 1,
+    "runSizes": [
+      137
+    ],
+    "runTimes": [
+      "2026-10-21T00:00:13.273Z"
+    ],
+    "medianGapHours": null,
+    "gapsHours": [],
+    "distinctRecipients": 135,
+    "amountsNim": [
+      205.74176,
+      295.79455,
+      151.25618,
+      341.02347,
+      10.45423,
+      765.11417,
+      0.01598,
+      0.24278
+    ]
+  },
+  "CHIPMUNK POOL": {
+    "payoutAddress": "NQ32 V144 LJDN FJND NLCQ PKBU HTPF KD8G J664",
+    "fetched": 500,
+    "oldestFetched": "2025-07-06T06:05:43.983Z",
+    "outgoing": 8,
+    "incoming": 492,
+    "incomingSenders": [
+      "NQ81 C01N BASE 0000 0000 0000 0000 0000 0000"
+    ],
+    "latestPayout": {
+      "iso": "2025-07-07T13:00:03.558Z",
+      "hash": "c7bc2b7257bab003515a3704a70d2b254cdcf877a89e8c1fb66721c64ee940ed",
+      "to": "NQ19 AU8X YUN2 AK6C 9DL1 5E6V F79A VLH0 8G7D",
+      "nim": 209.63523,
+      "fee": 0,
+      "block": 23519077,
+      "data": "",
+      "senderData": ""
+    },
+    "payoutRuns": 5,
+    "runSizes": [
+      1,
+      2,
+      2,
+      1,
+      2
+    ],
+    "runTimes": [
+      "2025-07-07T13:00:03.558Z",
+      "2025-07-07T12:00:03.101Z",
+      "2025-07-07T10:00:02.901Z",
+      "2025-07-06T09:00:03.486Z",
+      "2025-07-06T08:00:03.072Z"
+    ],
+    "medianGapHours": 1.00019,
+    "gapsHours": [
+      1,
+      1,
+      24,
+      1
+    ],
+    "distinctRecipients": 1,
+    "amountsNim": [
+      209.63523,
+      209.64092,
+      209.59937,
+      209.59936,
+      202.7548,
+      79.06656,
+      209.70331,
+      209.67632
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5": {
+    "address": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+    "balance": 170441199815,
+    "delegation": "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV",
+    "inactiveBalance": 0,
+    "inactiveFrom": null,
+    "retiredBalance": 0
+  },
+  "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5 (account)": {
+    "address": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+    "balance": 2915136561,
+    "type": "basic"
+  },
+  "NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E": {
+    "address": "NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E",
+    "balance": 12004950000,
+    "delegation": "NQ32 1U9X 7P3X B2H5 XA00 5LC2 5KFE VBQE X3BU",
+    "inactiveBalance": 0,
+    "inactiveFrom": null,
+    "retiredBalance": 0
+  },
+  "NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E (account)": {
+    "address": "NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E",
+    "balance": 659091200,
+    "type": "basic"
+  },
+  "stakingContractPayout": {
+    "hash": "7b73d7233d3ce650e79d283349cc1260f2e350cd1f6272dfbbb5a06e1e924f3a",
+    "blockNumber": 64670738,
+    "timestamp": 1792463748840,
+    "confirmations": 99303,
+    "size": 187,
+    "relatedAddresses": [
+      "NQ77 0000 0000 0000 0000 0000 0000 0000 0001",
+      "NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717",
+      "NQ94 9K0H FB0L FV2F NAQH L49Q 5E34 JL41 6GVG"
+    ],
+    "from": "NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717",
+    "fromType": 0,
+    "to": "NQ77 0000 0000 0000 0000 0000 0000 0000 0001",
+    "toType": 3,
+    "value": 1135487,
+    "fee": 0,
+    "senderData": "",
+    "recipientData": "064cc117ac147f44fb2b11a11382b86495081343b0",
+    "flags": 0,
+    "validityStartHeight": 64670736,
+    "proof": "00bf3e66b3bcbf1103ff85d4980f34a5be836752379b4e0ab53b900e65c40f78a600f6dafd9bd2029758b928e91ad83ffd9482e70cf7040c67a9c888e9afd71f20b5cb0debbd4188d0463ee73f046e32969a76541e206f10bf8e912471db49eb7a01",
+    "networkId": 24,
+    "executionResult": true
+  }
+}

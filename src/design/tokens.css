@@ -1,0 +1,145 @@
+/* Kickback design tokens. Palette: Split complementary (the app theme).
+   Extracted from design/Kickback Prototype.html. Lime is always the primary accent. */
+:root {
+  /* palette */
+  --kb-bg: #0B0D1C;
+  --kb-surface: #161A30;
+  --kb-raised: #1F2440;
+  --kb-hairline: #2A3052;
+  --kb-line: var(--kb-hairline);
+  --kb-second: #4C77F0;
+  --kb-on-second: #F2F4FF;
+  --kb-third: #C64CF0;
+  --kb-fourth: var(--kb-third);
+  --kb-lime: #C8F04A;            /* primary accent, CTA, success */
+  --kb-lime-soft: rgba(200, 240, 74, .14);
+  --kb-on-lime: var(--kb-bg);
+  --kb-text: #F2F4FF;
+  --kb-text-2: #99A0BE;
+  --kb-text-3: #5D6380;
+  --kb-text2: var(--kb-text-2);
+  --kb-text3: var(--kb-text-3);
+  --kb-error: #FF6B5B;           /* errors only: one icon and one word */
+
+  /* derived (precomputed, no color-mix needed at runtime) */
+  --kb-accent: var(--kb-second);   /* overdue segments, second dots */
+  --kb-label: #8BA6F6;             /* eyebrows: second 62% + text */
+  --kb-chart: var(--kb-second);    /* past bars @ 55% */
+  --kb-chart-past: rgba(76, 119, 240, .55);
+  --kb-panel: #101325;
+  --kb-page: #070811;
+  --kb-backdrop: #04050A;          /* behind layers while they move */
+  --kb-tint-accent: #243262;       /* contact bubble, accent 26% over surface */
+  --kb-tint-third: #442762;        /* contact bubble, third 26% over surface */
+  --kb-ring-accent: rgba(76, 119, 240, .55);
+  --kb-ring-third: rgba(198, 76, 240, .55);
+  --kb-scrim: rgba(11, 13, 28, .7); /* sheet backdrop: bg 70% */
+  --kb-numc: currentColor;          /* numbers dim to text-2 when data is stale */
+
+  /* type */
+  --kb-font: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+  --kb-fs-amount: 64px;   --kb-lh-amount: .9;    /* 800, -0.045em */
+  --kb-fs-amount-dec: .56em;                     /* text-2 */
+  --kb-fs-stack: 54px;    --kb-lh-stack: .88;    /* 800, -0.055em */
+  --kb-fs-headline: 40px; --kb-lh-headline: .92; /* 900, upper */
+  --kb-fs-headline-sm: 32px;
+  --kb-fs-title: 22px;
+  --kb-fs-body: 16px;     --kb-lh-body: 1.45;
+  --kb-fs-body-sm: 15px;
+  --kb-fs-caption: 13px;
+  --kb-fs-label: 12px;    --kb-ls-label: .12em;  /* 700, upper */
+  --kb-fs-tab: 11px;
+
+  /* spacing (4pt) */
+  --kb-s1: 4px;  --kb-s2: 8px;  --kb-s3: 12px;
+  --kb-s4: 16px; --kb-s5: 20px; --kb-s6: 24px;
+  --kb-s8: 32px; --kb-s10: 40px; --kb-s14: 56px;
+  --kb-gutter: 20px;
+  --kb-tap: 44px;
+
+  /* radius */
+  --kb-r-sheet: 32px;
+  --kb-r-card-lg: 28px;
+  --kb-r-card: 24px;
+  --kb-r-card-sm: 20px;
+  --kb-r-input: 16px;
+  --kb-r-pill: 999px;
+
+  /* shadow */
+  --kb-sh-stack: 0 -10px 24px rgba(0, 0, 0, .45);
+  --kb-sh-lime-glow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 0 28px rgba(255, 255, 255, .28);
+  --kb-sh-fab: 0 10px 30px rgba(200, 240, 74, .35);
+  --kb-sh-float: 0 16px 40px rgba(0, 0, 0, .5);
+  --kb-sh-sheet: 0 -20px 60px rgba(0, 0, 0, .6);
+  --kb-sh-layer: -14px 0 36px rgba(0, 0, 0, .38);
+
+  /* hand-drawn hatch: one fixed 48px seamless SVG tile (see hatch.css) */
+  --kb-hatch-size: 48px;
+
+  /* motion: transform + opacity only */
+  --kb-ease: cubic-bezier(.2, .8, .2, 1);
+  --kb-ease-page: cubic-bezier(.32, .72, 0, 1);  /* all page motion */
+  --kb-ease-out-in: cubic-bezier(.4, 0, 1, 1);   /* toast out */
+  --kb-ease-fx: cubic-bezier(.4, 0, .2, 1);      /* shimmer, coin */
+  --kb-parallax: -30%;           /* screen under a push */
+  --kb-dim-push: .35;
+  --kb-dim-modal: .40;
+  --kb-modal-back-scale: .94;    /* + radius 28px */
+  --kb-swipe-back: 35%;          /* of width, or a flick */
+  --kb-swipe-dismiss: 25%;       /* of height, or a flick */
+  --kb-dur-micro: 150ms;
+  --kb-dur-press: 120ms;         /* button scale .97 */
+  --kb-dur-snap: 150ms;          /* Stack snap to 5% */
+  --kb-dur-tab: 200ms;           /* crossfade + 8px */
+  --kb-dur-push: 340ms;          /* push / pop */
+  --kb-dur-modal-in: 380ms;
+  --kb-dur-modal-out: 300ms;
+  --kb-dur-swap: 220ms;          /* modal to modal crossfade */
+  --kb-dur-fade: 240ms;          /* system screens */
+  --kb-dur-rm: 180ms;            /* reduced motion: everything is this crossfade */
+  --kb-dur-spring-back: 250ms;   /* cancelled gesture */
+  --kb-dur-stack: 250ms;         /* rebalance, reorder */
+  --kb-dur-sheet-in: 320ms;
+  --kb-dur-sheet-out: 260ms;
+  --kb-dur-shake: 300ms;         /* 3 cycles, 6px */
+  --kb-dur-hatch-sweep: 500ms;
+  --kb-dur-logo: 600ms;          /* + 800ms glow pulse */
+  --kb-dur-count: 700ms;         /* count from 85% */
+  --kb-dur-hold: 1200ms;         /* release springs back 200ms */
+  --kb-breathe: 2s;              /* next segment */
+  --kb-stagger-bar: 30ms;
+  --kb-stagger-seg: 60ms;
+  --kb-stagger-logo: 70ms;
+  --kb-stagger-stack: 80ms;
+  --kb-stagger-done: 150ms;
+  --kb-offset-screen: 24px;
+  --kb-offset-card: 20px;
+  --kb-press-scale: .97;
+  --kb-hold-scale: .98;
+  --kb-stack-overlap: 12px;
+
+  /* feedback: what happened, how to undo, what happens next */
+  --kb-toast-ms: 4000ms;         /* lime check, one line, optional action */
+  --kb-toast-undo-ms: 6000ms;    /* with Undo: + shrinking lime line */
+  --kb-toast-in: 260ms;
+  --kb-toast-out: 200ms;
+  --kb-banner-h: 62px;           /* persistent issue: icon + one line + one action; pushes content down */
+  --kb-banner-push: 72px;
+
+  /* segmented bar */
+  --kb-seg-h-sm: 6px;
+  --kb-seg-h-lg: 10px;
+  --kb-seg-gap: 4px;
+  --kb-seg-on: var(--kb-lime);
+  --kb-seg-off: var(--kb-surface);  /* + hatch, ink-bar */
+  --kb-seg-stagger: 60ms;
+
+  /* app icon */
+  --kb-icon-radius: 22%;
+  --kb-icon-mark: 56%;
+
+  /* layout */
+  --kb-app-max: 480px;
+  --kb-safe-top: env(safe-area-inset-top, 0px);
+  --kb-safe-bottom: env(safe-area-inset-bottom, 0px);
+}

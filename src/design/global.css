@@ -1,0 +1,157 @@
+@import './tokens.css';
+@import './hatch.css';
+
+/* Archivo, self-hosted variable font (400-900), same files the prototype bundles. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 400 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url('./fonts/archivo-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 400 900;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url('./fonts/archivo-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--kb-page);
+  color: var(--kb-text);
+  font-family: var(--kb-font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  overflow: hidden;
+}
+#app { position: fixed; inset: 0; }
+button { font-family: inherit; color: inherit; -webkit-user-select: none; user-select: none; }
+input { font-family: inherit; }
+input::placeholder { color: var(--kb-text-3); }
+h1, h2, p { margin: 0; }
+a { color: var(--kb-lime); }
+
+/* keyframes (from the prototype; all transform/opacity) */
+@keyframes kbspin { to { transform: rotate(360deg); } }
+@keyframes kbpulse { 0% { transform: scale(.7); opacity: .7; } 100% { transform: scale(1.5); opacity: 0; } }
+@keyframes kbping { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes kbShrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes kbPop { 0% { transform: scale(.3); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes kbFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kbToastIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes kbToastOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px); } }
+@keyframes kbCardIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+@keyframes kbBar { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes kbBarSettle { 0% { transform: scaleY(0); } 70% { transform: scaleY(1.06); } 100% { transform: scaleY(1); } }
+@keyframes kbBreathe { 0%, 100% { opacity: 0; } 50% { opacity: .45; } }
+@keyframes kbShimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes kbK1 { from { opacity: 0; transform: translate(-60px, -24px); } to { opacity: 1; transform: none; } }
+@keyframes kbK2 { from { opacity: 0; transform: translate(-60px, 24px); } to { opacity: 1; transform: none; } }
+@keyframes kbK3 { from { opacity: 0; transform: translate(30px, -60px); } to { opacity: 1; transform: none; } }
+@keyframes kbK4 { from { opacity: 0; transform: translate(60px, 60px); } to { opacity: 1; transform: none; } }
+@keyframes kbGlowPulse { 0% { opacity: 0; transform: scale(.6); } 40% { opacity: 1; transform: scale(1.08); } 100% { opacity: 0; transform: scale(1.25); } }
+@keyframes kbRipple { from { opacity: .8; transform: scale(1); } to { opacity: 0; transform: scale(1.06, 1.6); } }
+
+/* Reduced motion: every animation becomes a 180ms fade to its final value.
+   Spinners/rotating rays opt out with data-kb-keep. */
+html[data-kb-rm='1'] *:not([data-kb-keep]) {
+  animation-name: kbFade !important;
+  animation-duration: 180ms !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+/* ---------- shared primitives ---------- */
+.kb-scroll { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.kb-scroll::-webkit-scrollbar { display: none; }
+
+/* tab screens leave room for the floating tab bar */
+.kb-page { padding: 8px var(--kb-gutter) calc(128px + var(--kb-safe-bottom)); display: flex; flex-direction: column; gap: 20px; }
+/* pushed screens pin their CTA to the bottom */
+.kb-page-push { min-height: 100%; padding: 8px var(--kb-gutter) calc(24px + var(--kb-safe-bottom)); display: flex; flex-direction: column; gap: 20px; }
+
+.kb-press { transition: transform var(--kb-dur-press) var(--kb-ease); cursor: pointer; }
+.kb-press:active { transform: scale(var(--kb-press-scale)); }
+.kb-press-soft { transition: transform 160ms var(--kb-ease); cursor: pointer; }
+.kb-press-soft:active { transform: scale(var(--kb-press-scale)); }
+
+.kb-num { font-variant-numeric: tabular-nums; }
+.kb-dim { color: var(--kb-text-2); }
+
+.kb-eyebrow {
+  font-size: var(--kb-fs-label); font-weight: 700; letter-spacing: var(--kb-ls-label);
+  text-transform: uppercase; color: var(--kb-label);
+}
+.kb-h1 {
+  font-size: var(--kb-fs-headline); line-height: var(--kb-lh-headline); font-weight: 900;
+  letter-spacing: -0.02em; text-transform: uppercase; text-wrap: balance;
+}
+.kb-body { font-size: 15px; line-height: var(--kb-lh-body); color: var(--kb-text-2); }
+
+.kb-btn {
+  border: none; border-radius: var(--kb-r-pill); font-weight: 800; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  transition: transform var(--kb-dur-press) var(--kb-ease);
+}
+.kb-btn:active { transform: scale(var(--kb-press-scale)); }
+.kb-btn-primary { height: 60px; width: 100%; background: var(--kb-lime); color: var(--kb-on-lime); font-size: 17px; box-shadow: var(--kb-sh-lime-glow); }
+.kb-btn-ghost { height: 56px; width: 100%; background: transparent; border: 1px solid var(--kb-line); color: var(--kb-text); font-size: 16px; font-weight: 700; }
+.kb-btn-danger { height: 52px; width: 100%; background: transparent; border: 1px solid rgba(255, 107, 91, .4); color: var(--kb-error); font-size: 16px; font-weight: 700; }
+.kb-link { height: 44px; padding: 0 4px; border: none; background: none; color: var(--kb-lime); font-size: 14px; font-weight: 700; cursor: pointer; transition: transform var(--kb-dur-press) var(--kb-ease); }
+.kb-link:active { transform: scale(var(--kb-press-scale)); }
+.kb-link-quiet { color: var(--kb-text-2); text-decoration: underline; text-underline-offset: 3px; align-self: center; padding: 0 12px; }
+
+.kb-icon-btn {
+  width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--kb-line); background: transparent;
+  color: var(--kb-text); display: grid; place-items: center; cursor: pointer; flex: none;
+  transition: transform var(--kb-dur-press) var(--kb-ease);
+}
+.kb-icon-btn:active { transform: scale(var(--kb-press-scale)); }
+
+.kb-card { border-radius: var(--kb-r-card); background: var(--kb-surface); }
+
+.kb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--kb-lime); flex: none; display: inline-block; }
+
+.kb-safe-line { display: flex; align-items: flex-start; gap: 10px; color: var(--kb-lime); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.kb-safe-line svg { flex: none; margin-top: 1px; }
+
+.kb-reason {
+  display: flex; align-items: flex-start; justify-content: center; gap: 8px; margin-bottom: 10px;
+  font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--kb-text); text-align: center;
+  animation: kbFade 200ms ease-out both;
+}
+.kb-reason::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--kb-error); flex: none; margin-top: 6px; }
+
+.kb-row-list { border-radius: var(--kb-r-card); background: var(--kb-surface); padding: 4px 16px; }
+.kb-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.kb-row + .kb-row { border-top: 1px solid var(--kb-line); }
+
+.kb-step-num {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--kb-line);
+  display: grid; place-items: center; font-weight: 800; color: var(--kb-lime); flex: none;
+}
+.kb-how { display: flex; gap: 14px; align-items: center; padding: 14px 16px; border-radius: 20px; background: var(--kb-surface); font-size: 15px; }
+
+.kb-skel { position: relative; overflow: hidden; background: var(--kb-surface); }
+.kb-skel::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(242, 244, 255, .08), transparent);
+  animation: kbShimmer 1.4s var(--kb-ease-fx) infinite;
+}
+
+.kb-spinner {
+  width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid var(--kb-line);
+  border-top-color: var(--kb-lime); animation: kbspin .9s linear infinite; flex: none;
+}
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

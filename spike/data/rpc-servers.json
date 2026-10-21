@@ -1,0 +1,22 @@
+{
+  "mainnet": [
+    {
+      "name": "Nimiq Watch Mainnet",
+      "endpoint": "https://rpc.nimiqwatch.com",
+      "maintainer": "sisou",
+      "statusLink": null,
+      "network": "mainnet",
+      "description": "Public RPC server. No uptime guarantees."
+    }
+  ],
+  "testnet": [
+    {
+      "name": "Nimiq Watch Testnet",
+      "endpoint": "https://rpc.testnet.nimiqwatch.com/",
+      "maintainer": "sisou",
+      "statusLink": null,
+      "network": "testnet",
+      "description": "Public RPC server. No uptime guarantees."
+    }
+  ]
+}
