@@ -15,6 +15,7 @@ import { ago } from '../../lib/time'
 import { shake } from '../../lib/anim'
 import { openLive } from '../../flows'
 import { useDry } from '../../stores/dry'
+import { useOps } from '../../stores/ops'
 import type { DryOutcome } from '../../stores/dry'
 import { parseNimInput } from '../../lib/money'
 import { nim2 } from '../../lib/format'
@@ -26,6 +27,7 @@ const diag = useDiag()
 const { copied, copy } = useCopy()
 const live = useLive()
 const dry = useDry()
+const ops = useOps()
 const OUTCOMES: Array<[DryOutcome, string]> = [['approve', 'Approve'], ['reject', 'Reject'], ['network', 'Network error'], ['failAfterSend', 'Fail after send']]
 const dryBal = ref(nim2(dry.chain.balanceLuna / 1e5))
 const dryKb = ref('25')
@@ -120,6 +122,10 @@ const lines = computed(() => {
     const parts = [e.name, e.type && `type=${e.type}`, e.code !== undefined && `code=${e.code}`, `message=${e.message}`, e.data && `data=${e.data}`].filter(Boolean)
     out.push([`Error ${i + 1} · ${e.where}`, parts.join(' · ')])
   })
+  // Money actions: kind, value (Luna), phase, hash, error. Newest first.
+  const recent = [...ops.ops].reverse().slice(0, 8)
+  if (!recent.length) out.push(['Money actions', 'none'])
+  recent.forEach((o, i) => out.push([`Money action ${i + 1}${o.dry ? ' (dry run)' : ''}`, `${o.flow} · ${o.req.kind} ${o.req.value} Luna${o.req.recipient ? ` to ${o.req.recipient}` : ''}${o.req.delegation ? ` to ${o.req.delegation}` : ''}${o.req.newDelegation ? ` to ${o.req.newDelegation}` : ''} · ${o.phase}${o.slow ? ' (slow)' : ''} · ${new Date(o.startedAt).toLocaleTimeString('en-GB')}${o.hash ? ` · hash ${o.hash}` : ''}${o.error ? ` · ${o.error}` : ''}`]))
   out.push(['User agent', navigator.userAgent])
   return out
 })
