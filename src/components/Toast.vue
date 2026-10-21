@@ -28,7 +28,7 @@ const ui = useUi()
   box-shadow: var(--kb-sh-float); overflow: hidden;
   animation: kbToastIn 260ms var(--kb-ease) both;
 }
-.toast.out { animation: kbToastOut 200ms var(--kb-ease-out-in) both; }
+.toast.out { animation: kbToastOut 200ms var(--kb-ease-out-in) both; pointer-events: none; }
 .check { width: 28px; height: 28px; border-radius: 50%; background: var(--kb-lime); color: var(--kb-bg); display: grid; place-items: center; flex: none; }
 .msg { flex: 1; min-width: 0; padding: 6px 0; }
 .act {

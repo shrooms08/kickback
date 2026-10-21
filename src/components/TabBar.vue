@@ -4,7 +4,7 @@ import Icon from './Icon.vue'
 import { useNav } from '../stores/nav'
 import type { ScreenName } from '../stores/nav'
 import { go } from '../router'
-import { goPlan, goRun, tabHome } from '../flows'
+import { goPlan, openRunMyPlan, tabHome } from '../flows'
 
 // Floating tab bar: Home, Kickbacks, [Run my plan], Plan, Pool.
 // The active pill glides with a transform (300ms, page easing).
@@ -37,7 +37,7 @@ const pillX = computed(() => {
     <button class="tab" :class="{ on: active === 0 }" @click="tabHome"><Icon name="home" :size="22" />Home</button>
     <button class="tab" :class="{ on: active === 1 }" @click="go('kickbacks')"><Icon name="bars" :size="22" :stroke="2.2" />Kickbacks</button>
     <div class="fab-cell">
-      <button class="fab" aria-label="Run my plan" @click="goRun"><Icon name="run" :size="26" :stroke="2.6" /></button>
+      <button class="fab" aria-label="Run my plan" @click="openRunMyPlan"><Icon name="run" :size="26" :stroke="2.6" /></button>
     </div>
     <button class="tab" :class="{ on: active === 3 }" @click="goPlan"><Icon name="plan" :size="22" />Plan</button>
     <button class="tab" :class="{ on: active === 4 }" @click="go('pool')"><Icon name="shield" :size="22" />Pool</button>
@@ -65,6 +65,8 @@ const pillX = computed(() => {
 .tab:active { transform: scale(var(--kb-press-scale)); }
 .fab-cell { position: relative; height: 100%; }
 .fab {
+  /* 70x70 tap target (min 56), above the safe area via the bar's bottom offset. */
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; z-index: 2; min-width: 56px; min-height: 56px;
   position: absolute; left: 50%; top: -26px; transform: translateX(-50%); width: 70px; height: 70px; border-radius: 50%;
   border: 6px solid var(--kb-bg); background: var(--kb-lime); color: var(--kb-bg); display: grid; place-items: center; cursor: pointer;
   box-shadow: inset 0 2px 0 rgba(255, 255, 255, .55), inset 0 0 22px rgba(255, 255, 255, .35), var(--kb-sh-fab);

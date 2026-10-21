@@ -15,6 +15,7 @@ import { useFlow } from './stores/flow'
 import { useLive } from './stores/live'
 import { useData } from './stores/data'
 import { sameAddr } from './services/chain'
+import { logNav } from './lib/navlog'
 import {
   clearFinished, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
 } from './money'
@@ -416,13 +417,16 @@ export function keepInstead() {
   })
 }
 
-export function shareNow() {
-  const account = useAccount(), ui = useUi()
-  if (isLive() && usePlan().planStartedAt == null) { ui.showToast('Save your plan first. Kickbacks after that are shared with it.'); return goPlan() }
-  if (isLive() && useFlow().runPhase === 'running') return goRun()
-  if (account.readyCents) goRun()
-  else ui.showToast('Nothing to share yet. Your first kickback lands in about 9h.')
+/** The one way to open Run my plan: the lime tab button and Home "Share now" both call this. */
+export function openRunMyPlan() {
+  logNav('open Run my plan')
+  goRun()
 }
+
+export function shareNow() {
+  return openRunMyPlan()
+}
+
 
 // ---------- banners ----------
 

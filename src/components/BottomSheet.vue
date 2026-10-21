@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { bindSheetHost, useUi } from '../stores/ui'
 import type { SheetKind } from '../stores/ui'
-import { anim, release, settle, track, reducedMotion } from '../lib/anim'
+import { anim, release, settleWithin, track, reducedMotion } from '../lib/anim'
 import type { Running } from '../lib/anim'
 import AddSomeoneSheet from '../screens/sheets/AddSomeoneSheet.vue'
 import StopEarningSheet from '../screens/sheets/StopEarningSheet.vue'
@@ -36,7 +36,7 @@ function open(k: SheetKind) {
       anim(L, sheetEl.value, [{ transform: 'translateY(100%)' }, { transform: 'translateY(0%)' }], 320)
       anim(L, backdropEl.value, [{ opacity: 0 }, { opacity: 1 }], 240, 'ease')
     }
-    settle(L).then(() => release(L))
+    settleWithin(L).then(() => release(L))
   })
 }
 
@@ -57,7 +57,7 @@ function close(after?: () => void) {
     anim(L, sh, [{ transform: curT }, { transform: 'translateY(100%)' }], 260)
     anim(L, bd, [{ opacity: curO }, { opacity: 0 }], 260, 'ease')
   }
-  settle(L).then(() => {
+  settleWithin(L).then(() => {
     ui.sheet = null
     closing = false
     nextTick(() => {
@@ -78,7 +78,8 @@ function dragDown(e: PointerEvent) {
   bd?.getAnimations().forEach(a => a.cancel())
   const y0 = e.clientY, H = sh.offsetHeight || 400
   let d = 0, last = { y: y0, t: performance.now() }, prev = last
-  track((ev) => {
+  const snapBack = () => { sh.style.transform = ''; if (bd) bd.style.opacity = '' }
+  track(e.pointerId, (ev) => {
     prev = last; last = { y: ev.clientY, t: performance.now() }
     d = Math.max(0, ev.clientY - y0)
     sh.style.transform = `translateY(${d}px)`
@@ -89,8 +90,8 @@ function dragDown(e: PointerEvent) {
     const L: Running[] = []
     anim(L, sh, [{ transform: `translateY(${d}px)` }, { transform: 'translateY(0px)' }], 250)
     anim(L, bd, [{ opacity: Math.max(0, 1 - d / H) }, { opacity: 1 }], 250)
-    settle(L).then(() => { sh.style.transform = ''; if (bd) bd.style.opacity = ''; release(L) })
-  })
+    settleWithin(L).then(() => { snapBack(); release(L) })
+  }, snapBack)
 }
 
 onMounted(() => bindSheetHost({ open, close }))

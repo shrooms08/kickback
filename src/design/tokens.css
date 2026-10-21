@@ -142,5 +142,6 @@
   /* layout */
   --kb-app-max: 480px;
   --kb-safe-top: env(safe-area-inset-top, 0px);
-  --kb-safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* At least 12px: some Android WebViews report 0 while a gesture bar sits at the bottom. */
+  --kb-safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
 }

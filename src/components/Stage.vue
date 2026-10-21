@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import TabBar from './TabBar.vue'
 import Banner from './Banner.vue'
@@ -10,7 +10,8 @@ import { useUi } from '../stores/ui'
 import { useAccount } from '../stores/account'
 import { useFlow } from '../stores/flow'
 import { SCREEN_COMPONENTS } from '../screens/registry'
-import { anim, release, settle, track } from '../lib/anim'
+import { anim, longest, release, settleWithin, track } from '../lib/anim'
+import { logNav, navlog } from '../lib/navlog'
 import type { Running } from '../lib/anim'
 import { back } from '../router'
 import { clearTimers, goPools, refreshStale, retryOnline } from '../flows'
@@ -38,8 +39,68 @@ const wallet = useWallet()
 const layerEls: Partial<Record<ScreenName, HTMLElement>> = {}
 const dimEls: Partial<Record<ScreenName, HTMLElement>> = {}
 let chromeEl: HTMLElement | null = null
-let navBusy = false
 let pending = false
+
+// ---------- the transition lock ----------
+// Held while a transition or gesture moves layers. It always has a deadline:
+// a transition releases when its animations finish OR after its duration +
+// 150 ms, whichever comes first; a gesture releases on pointerup/cancel, and
+// if neither arrives (the host took the touch) a watchdog abandons it after
+// 4 s without pointer movement. Unmounting the Stage releases it too.
+let running: Running[] = []
+/** Which finish() currently owns the lock; a stale one (force-released or superseded) does nothing. */
+let activeToken = 0
+let tokenSeq = 0
+let abandonGesture: (() => void) | null = null
+const GESTURE_IDLE_MS = 4000
+
+function lock(reason: string, maxMs: number) {
+  navlog.locked = true
+  navlog.lockedAt = Date.now()
+  navlog.lockReason = reason
+  navlog.lockDeadline = Date.now() + maxMs
+}
+function unlock() {
+  navlog.locked = false
+  navlog.lockReason = ''
+  navlog.lockDeadline = 0
+}
+const isLocked = () => navlog.locked
+
+/** Last resort: put every layer at rest and drop the lock. */
+function forceRelease(why: string) {
+  logNav(`lock force-released (${navlog.lockReason || 'unknown'}): ${why}`)
+  abandonGesture?.()
+  abandonGesture = null
+  activeToken = 0
+  release(running)
+  running = []
+  for (const x of [...Object.values(layerEls), ...Object.values(dimEls), chromeEl]) {
+    if (!x) continue
+    x.getAnimations().forEach(a => a.cancel())
+    x.style.transform = ''; x.style.opacity = ''; x.style.borderRadius = ''; x.style.willChange = ''
+  }
+  nav.$patch({ leaving: null, ltype: null, busy: false, gestureUnder: null })
+  unlock()
+  pending = false
+  const cur = route.name as ScreenName | undefined
+  if (cur && cur !== nav.screen) request(cur)
+}
+
+let watchdog = 0
+onMounted(() => {
+  watchdog = window.setInterval(() => {
+    if (navlog.locked && navlog.lockDeadline && Date.now() > navlog.lockDeadline) forceRelease('deadline passed')
+    // The busy flag must never outlive the lock (it drives the tap guard).
+    else if (!navlog.locked && nav.busy) { logNav('busy flag cleared without a lock'); nav.busy = false }
+  }, 250)
+})
+onBeforeUnmount(() => {
+  clearInterval(watchdog)
+  abandonGesture?.()
+  release(running)
+  unlock()
+})
 /** After a gesture the Stage is already on this screen; the router catches up asynchronously. */
 let expect: ScreenName | null = null
 
@@ -108,20 +169,21 @@ const chrome = computed(() => {
   return { z: zOf(own) + 1, tf: r.tf, r: r.r }
 })
 const edgeOn = computed(() => !nav.busy && !nav.gestureUnder && !ui.rm && !ui.sheet && !!(nav.screen && DEPTH[nav.screen]))
-const toastBottom = computed(() => `calc(${isTab(nav.screen) ? 108 : 96}px + var(--kb-safe-bottom))`)
+// On tab screens the toast sits above the lime button (bar 18 + 68, button pokes up 26).
+const toastBottom = computed(() => `calc(${isTab(nav.screen) ? 124 : 96}px + var(--kb-safe-bottom))`)
 
 // ---------- route -> transition ----------
 watch(() => route.name as ScreenName | undefined, (to) => { if (to) request(to) }, { immediate: true })
 
 function request(to: ScreenName) {
   if (expect) {
-    if (to !== expect) return
+    if (to !== expect) { logNav(`route ${to} ignored (syncing to ${expect})`); return }
     expect = null
   }
-  if (navBusy) { pending = true; return }
+  if (isLocked()) { pending = true; logNav(`route ${to} queued (locked: ${navlog.lockReason})`); return }
   const from = nav.screen
   if (to === from) return
-  if (!from) { nav.screen = to; return }
+  if (!from) { nav.screen = to; logNav(`start on ${to}`); return }
   if (ui.sheet) ui.closeSheet()
   const type = classify(from, to)
   let base: ScreenName | null = null
@@ -129,17 +191,26 @@ function request(to: ScreenName) {
   if (type === 'modalIn') { base = from; leaving = null }
   else if (type === 'modalSwap') base = from === 'approve' && to === 'success' ? 'home' : nav.base
   if (to === 'pools' && isTab(from)) nav.poolsFrom = from
-  navBusy = true
+  lock(`${type} ${from}→${to}`, 1000)
+  logNav(`${type} ${from}→${to}`)
   nav.$patch({ screen: to, base, leaving, ltype: type, busy: true, gestureUnder: null })
   nextTick(() => runTransition(type, from, to))
 }
 
 function finish(L: Running[], patch: Partial<{ screen: ScreenName, base: ScreenName | null, leaving: ScreenName | null, ltype: TransitionType | null, gestureUnder: ScreenName | null, busy: boolean }>, after?: () => void) {
-  settle(L).then(() => {
+  running = L
+  abandonGesture = null
+  const token = activeToken = ++tokenSeq
+  // Deadline = longest animation + 150 ms (plus a margin for the watchdog).
+  if (navlog.locked) navlog.lockDeadline = Date.now() + longest(L) + 600
+  settleWithin(L).then((how) => {
+    if (how === 'timeout') logNav(`animations did not report finished; released after ${longest(L) + 150} ms`)
+    if (token !== activeToken) return // force-released or superseded
     nav.$patch({ leaving: null, ltype: null, busy: false, ...patch })
     nextTick(() => {
       release(L)
-      navBusy = false
+      running = []
+      unlock()
       after?.()
       if (expect) { pending = false; return }
       const cur = route.name as ScreenName | undefined
@@ -209,18 +280,28 @@ function runTransition(type: TransitionType, from: ScreenName, to: ScreenName) {
 
 // ---------- left-edge swipe back (pushed screens) ----------
 function edgeDown(e: PointerEvent) {
-  if (nav.busy || nav.gestureUnder || navBusy || ui.rm || !nav.screen || !DEPTH[nav.screen]) return
+  if (nav.busy || nav.gestureUnder || isLocked() || ui.rm || !nav.screen || !DEPTH[nav.screen]) return
   const top = nav.screen
   const under: ScreenName = top === 'stake' ? 'pools' : (nav.poolsFrom || 'homeEmpty')
   try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }
   catch { /* ignore */ }
   const x0 = e.clientX
   let last = { x: x0, t: performance.now() }, prev = last, dx = 0
-  navBusy = true
+  lock('edge swipe', GESTURE_IDLE_MS)
+  logNav('edge swipe started')
   nav.gestureUnder = under
   const parts = () => ({ t: layerEls[top], u: layerEls[under], ud: dimEls[under], ch: nav.chromeOwner === under ? chromeEl : null })
   const W = () => layerEls[top]?.offsetWidth || 390
-  track((ev) => {
+  const abandon = () => {
+    // Its end never came and a new touch started: put everything back, no animation, no tap guard.
+    ;[layerEls[top], layerEls[under], dimEls[under], chromeEl].forEach((x) => { if (x) { x.style.transform = ''; x.style.opacity = '' } })
+    nav.gestureUnder = null
+    abandonGesture = null
+    unlock()
+    logNav('edge swipe abandoned (no pointerup; a new touch started)')
+  }
+  const stop = track(e.pointerId, (ev) => {
+    navlog.lockDeadline = Date.now() + GESTURE_IDLE_MS
     prev = last; last = { x: ev.clientX, t: performance.now() }
     dx = Math.max(0, ev.clientX - x0)
     const p = Math.min(1, dx / W()), P = parts(), ut = `translateX(${(-30 * (1 - p)).toFixed(2)}%)`
@@ -231,7 +312,8 @@ function edgeDown(e: PointerEvent) {
     const p = Math.min(1, dx / W()), v = (last.x - prev.x) / Math.max(1, last.t - prev.t), P = parts(), L: Running[] = []
     const ut = `translateX(${(-30 * (1 - p)).toFixed(2)}%)`
     const done = p > 0.35 || (v > 0.5 && dx > 12)
-    nav.busy = true
+    // Only a completed swipe navigates, so only it raises the tap guard; a snap-back never eats taps.
+    if (done) nav.busy = true
     const clearInline = () => [P.t, P.u, P.ud, P.ch].forEach((x) => { if (x) { x.style.transform = ''; x.style.opacity = '' } })
     if (done) {
       const d = Math.max(140, 340 * (1 - p)), uF = [{ transform: ut }, { transform: 'translateX(0%)' }]
@@ -247,13 +329,14 @@ function edgeDown(e: PointerEvent) {
       anim(L, P.ud, [{ transform: ut, opacity: 0.35 * (1 - p) }, { transform: 'translateX(-30%)', opacity: 0.35 }], 250)
       finish(L, { gestureUnder: null }, clearInline)
     }
-  })
+  }, abandon)
+  abandonGesture = () => { stop(); abandon() }
 }
 
 // ---------- drag a modal down from its top 80px ----------
 function modalDown(e: PointerEvent) {
   const scr = nav.screen
-  if (!scr || nav.busy || navBusy || ui.rm || !isModal(scr) || ui.sheet) return
+  if (!scr || nav.busy || isLocked() || ui.rm || !isModal(scr) || ui.sheet) return
   if (scr === 'approve' || ui.holding || (scr === 'run' && flow.steps.some(x => x.st === 'waiting'))) return
   if ((e.target as HTMLElement).closest('button,input')) return
   const mEl = layerEls[scr]
@@ -263,9 +346,18 @@ function modalDown(e: PointerEvent) {
   const y0 = e.clientY, H = rect.height, base = nav.base
   let active = false, d = 0, last = { y: y0, t: performance.now() }, prev = last
   const parts = () => ({ m: mEl, b: base ? layerEls[base] : null, bd: base ? dimEls[base] : null, ch: base && nav.chromeOwner === base ? chromeEl : null })
-  track((ev) => {
+  const abandon = () => {
+    if (!active) return
+    ;[mEl, base ? layerEls[base] : null, base ? dimEls[base] : null, chromeEl].forEach((x) => { if (x) { x.style.transform = ''; x.style.opacity = ''; x.style.borderRadius = '' } })
+    abandonGesture = null
+    unlock()
+    logNav('modal drag abandoned (no pointerup; a new touch started)')
+  }
+  const stop = track(e.pointerId, (ev) => {
     const dy = ev.clientY - y0
-    if (!active) { if (dy > 6) { active = true; navBusy = true } else return }
+    // Taps never start a drag: only a real downward move (> 6 px) takes the lock.
+    if (!active) { if (dy > 6) { active = true; lock('modal drag', GESTURE_IDLE_MS); logNav('modal drag started'); abandonGesture = () => { stop(); abandon() } } else return }
+    navlog.lockDeadline = Date.now() + GESTURE_IDLE_MS
     prev = last; last = { y: ev.clientY, t: performance.now() }; d = Math.max(0, dy)
     const p = d / H, P = parts(), sc = `scale(${(0.94 + 0.06 * p).toFixed(4)})`
     P.m.style.transform = `translateY(${d}px)`

@@ -11,6 +11,7 @@ import { wireLiveClock } from './stores/live'
 import { openLive } from './flows'
 import { useOps } from './stores/ops'
 import { syncRunSteps } from './money'
+import { startTapLog } from './lib/navlog'
 
 // Dev panel: only in dev builds with ?mock=1. Never part of a production bundle.
 const DevPanel = import.meta.env.DEV ? defineAsyncComponent(() => import('./dev/DevPanel.vue')) : null
@@ -38,6 +39,7 @@ onMounted(async () => {
   window.addEventListener('offline', onOffline)
   bindFxLayer(fx.value || null)
   wireLiveClock()
+  startTapLog()
   // Run / withdraw steps follow their ops (also after a restart).
   const ops = useOps()
   watch(() => ops.ops.map(o => o.phase + (o.slow ? '!' : '')).join(), () => syncRunSteps())

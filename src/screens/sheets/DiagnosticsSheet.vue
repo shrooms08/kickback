@@ -16,6 +16,8 @@ import { shake } from '../../lib/anim'
 import { openLive } from '../../flows'
 import { useDry } from '../../stores/dry'
 import { useOps } from '../../stores/ops'
+import { navlog } from '../../lib/navlog'
+import { useNav } from '../../stores/nav'
 import type { DryOutcome } from '../../stores/dry'
 import { parseNimInput } from '../../lib/money'
 import { nim2 } from '../../lib/format'
@@ -28,6 +30,8 @@ const { copied, copy } = useCopy()
 const live = useLive()
 const dry = useDry()
 const ops = useOps()
+const navStore = useNav()
+const clock = (t: number) => new Date(t).toLocaleTimeString('en-GB') + '.' + String(t % 1000).padStart(3, '0')
 const OUTCOMES: Array<[DryOutcome, string]> = [['approve', 'Approve'], ['reject', 'Reject'], ['network', 'Network error'], ['failAfterSend', 'Fail after send']]
 const dryBal = ref(nim2(dry.chain.balanceLuna / 1e5))
 const dryKb = ref('25')
@@ -122,6 +126,18 @@ const lines = computed(() => {
     const parts = [e.name, e.type && `type=${e.type}`, e.code !== undefined && `code=${e.code}`, `message=${e.message}`, e.data && `data=${e.data}`].filter(Boolean)
     out.push([`Error ${i + 1} · ${e.where}`, parts.join(' · ')])
   })
+  // Navigation: is the transition lock held, and what did recent taps hit?
+  out.push(['Nav lock', navlog.locked ? `LOCKED for ${Math.round((Date.now() - navlog.lockedAt) / 100) / 10}s (${navlog.lockReason}), auto-release in ${Math.max(0, Math.round((navlog.lockDeadline - Date.now()) / 100) / 10)}s` : 'free'])
+  out.push(['Nav state', `screen ${navStore.screen ?? '-'} · route ${location.hash || '-'} · base ${navStore.base ?? '-'} · leaving ${navStore.leaving ?? '-'} · busy ${navStore.busy}`])
+  const fab = document.querySelector('nav .fab')
+  if (fab) {
+    const r = fab.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    out.push(['Lime button', `${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.left + r.width / 2)},${Math.round(r.top + r.height / 2)} · elementFromPoint ${hit && (hit === fab || fab.contains(hit)) ? 'is the button' : 'is NOT the button: ' + (hit ? hit.tagName.toLowerCase() + '.' + String(hit.className) : 'nothing')} · viewport ${innerWidth}x${innerHeight}`])
+  }
+  if (!navlog.taps.length) out.push(['Taps', 'none recorded'])
+  ;[...navlog.taps].reverse().forEach((t, i) => out.push([`Tap ${i + 1}`, `${clock(t.t)} ${t.type} at ${t.x},${t.y} → ${t.hit}`]))
+  if (!navlog.events.length) out.push(['Nav events', 'none recorded'])
+  ;[...navlog.events].reverse().forEach((e, i) => out.push([`Nav ${i + 1}`, `${clock(e.t)} ${e.what}`]))
   // Money actions: kind, value (Luna), phase, hash, error. Newest first.
   const recent = [...ops.ops].reverse().slice(0, 8)
   if (!recent.length) out.push(['Money actions', 'none'])

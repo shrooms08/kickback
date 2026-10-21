@@ -34,6 +34,8 @@ body {
 }
 #app { position: fixed; inset: 0; }
 button { font-family: inherit; color: inherit; -webkit-user-select: none; user-select: none; }
+/* Taps fire at once (no double-tap-zoom wait) and are never treated as a pan. */
+button, [role='button'], a, label { touch-action: manipulation; }
 input { font-family: inherit; }
 input::placeholder { color: var(--kb-text-3); }
 h1, h2, p { margin: 0; }
