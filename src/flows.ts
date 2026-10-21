@@ -16,6 +16,7 @@ import { useLive } from './stores/live'
 import { useData } from './stores/data'
 import { sameAddr } from './services/chain'
 import { logNav } from './lib/navlog'
+import { useSession } from './stores/session'
 import {
   clearFinished, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
 } from './money'
@@ -82,6 +83,9 @@ export async function openLive() {
     return go('error')
   }
   go(account.staked ? 'home' : 'homeEmpty')
+  // Sign in with the wallet (once per device and network) and sync. Never awaited: staking
+  // and viewing never wait for it, and a declined signature just means local-only.
+  void useSession().start(useWallet().address)
 }
 
 export { previewBlocked } from './money'
@@ -408,9 +412,9 @@ export function keepInstead() {
     // Keeping needs no transaction: mark what's ready as handled.
     const plan = usePlan(), luna = account.readyLuna
     return ui.closeSheet(() => {
-      plan.recordShared(luna, undefined, useWallet().isDry)
+      const entry = plan.recordShared(luna, undefined, useWallet().isDry, 'keep')
       go('home')
-      ui.showToast(`${nim2(luna / 1e5)} NIM kept in your wallet.`, { undo: true, fn: () => { plan.ledger = plan.ledger.slice(0, -1) } })
+      ui.showToast(`${nim2(luna / 1e5)} NIM kept in your wallet.`, { undo: true, fn: () => plan.undoShared(entry?.id) })
     })
   }
   ui.closeSheet(() => {

@@ -67,7 +67,8 @@ for (let i = 0; i < 120; i++) {
 await sleep(600)
 log('pool list loads from testnet (every active validator)', pools.length >= 5 && pools.some(p => p.name === 'Puddle'), `${pools.length}: ${pools.map(p => `${p.name} (${p.type})`).join(', ')}`)
 log('every pool is labelled "Testnet validator"', pools.length > 0 && pools.every(p => p.badge === 'Testnet validator') && (await page.locator('[data-kb-layer="pools"] .badge', { hasText: 'Testnet validator' }).count()) > 0)
-const rpcHosts = [...new Set(requests.filter(r => r.startsWith('POST')).map(r => r.split(' ')[1].replace(/\/$/, '')))]
+const isRpc = r => r.startsWith('POST') && r.includes('nimiqwatch.com')
+const rpcHosts = [...new Set(requests.filter(isRpc).map(r => r.split(' ')[1].replace(/\/$/, '')))]
 const apiHosts = [...new Set(requests.filter(r => r.includes('validators-api')).map(r => new URL(r.split(' ')[1]).host))]
 log('testnet session only called testnet services', rpcHosts.every(h => h === 'https://rpc.testnet.nimiqwatch.com') && apiHosts.every(h => h === 'validators-api-test.je-cf9.workers.dev'), `rpc ${JSON.stringify(rpcHosts)} api ${JSON.stringify(apiHosts)}`)
 const keys = await page.evaluate(() => Object.keys(localStorage))
@@ -84,7 +85,7 @@ log('mainnet: no test kickback control, mainnet URLs', !(await page.locator('[da
 const s3 = await state(s => ({ marked: s.plan.marked.length, ready: s.account.readyLuna, started: s.plan.planStartedAt, contacts: s.plan.contacts.length }))
 log('mainnet: the testnet plan, contact and test kickback do not appear', s3.marked === 0 && s3.ready === 0 && s3.started == null && s3.contacts === 0, JSON.stringify(s3))
 await closeSheet()
-const mainRpc = [...new Set(requests.filter(r => r.startsWith('POST')).map(r => r.split(' ')[1].replace(/\/$/, '')))]
+const mainRpc = [...new Set(requests.filter(isRpc).map(r => r.split(' ')[1].replace(/\/$/, '')))]
 log('mainnet session only called the mainnet RPC', mainRpc.length > 0 && mainRpc.every(h => h === 'https://rpc.nimiqwatch.com'), JSON.stringify(mainRpc))
 
 // ---------- back to testnet: its data is still there ----------

@@ -333,7 +333,7 @@ async function walkSteps(from: number) {
     if (s.st !== 'pending') continue
     if (s.type === 'keep') {
       setStep(i, { st: 'approved' })
-      plan.recordShared(s.luna ?? 0, undefined, useWallet().isDry)
+      plan.recordShared(s.luna ?? 0, undefined, useWallet().isDry, 'keep')
       continue
     }
     const req: SendRequest = s.type === 'send'
@@ -352,7 +352,7 @@ async function walkSteps(from: number) {
     if (op.phase === 'confirming' || op.phase === 'confirmed') {
       if (s.type === 'send' || s.type === 'restake') fxStep(s.type)
       // Recorded as shared once it is in a block; failures stay ready to share.
-      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash, final.dry); syncRunSteps(); maybeFinish() })
+      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash, final.dry, s.type === 'send' ? 'send' : 'restake'); syncRunSteps(); maybeFinish() })
     }
     syncRunSteps()
   }

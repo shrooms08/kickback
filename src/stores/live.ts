@@ -19,6 +19,8 @@ import { directValidators, grossStakingApy, knownValidators, status, supply } fr
 import type { ApiValidator } from '../services/validators'
 import { cacheGet, cacheSet, pruneCache } from '../lib/cache'
 import { ledgerFor, readyLuna } from '../lib/money'
+import { backendEnabled, readPoolStats } from '../services/backend'
+import type { PoolStatsRow } from '../services/backend'
 import { isTestnet } from '../lib/net'
 import { ago, clockOrDay, duration, hhmm, now, startClock } from '../lib/time'
 
@@ -123,6 +125,43 @@ function incomingOf(address: string, txs: Tx[]): Incoming[] {
   return out
 }
 
+/**
+ * The pool list from Supabase pool_stats, or null when it is unreachable, empty or older than
+ * an hour. Same selection as the client: mainnet = direct payout, active, elected, current
+ * score (and a payout in the last 72 h, applied in loadPools); testnet = every active validator.
+ */
+async function serverPools(): Promise<{ list: ApiValidator[], rewards: Record<string, string>, stats: Record<string, PoolStats>, at: number, notes: string[] } | null> {
+  if (!backendEnabled) return null
+  let rows: PoolStatsRow[]
+  try { rows = await readPoolStats() }
+  catch { return null }
+  if (!rows.length) return null
+  const at = Math.max(...rows.map(r => Date.parse(r.updated_at)))
+  if (!(Date.now() - at < H)) return null
+  const picked = rows.filter(r => r.active && (isTestnet || (r.payout_kind === 'direct' && r.elected && r.score_status === 'current')))
+  const rewards: Record<string, string> = {}, stats: Record<string, PoolStats> = {}
+  const list = picked.map((r): ApiValidator => {
+    const reward = r.reward_address || r.validator_address
+    rewards[norm(r.validator_address)] = reward
+    const lastPaidAt = r.last_payout_at ? Date.parse(r.last_payout_at) : null
+    stats[norm(reward)] = {
+      alive: isTestnet || (!!lastPaidAt && Date.now() - lastPaidAt <= 72 * H),
+      lastPaidAt,
+      batches: [],
+      intervalH: r.median_interval_s ? r.median_interval_s / 3600 : null,
+      source: 'probe',
+      checkedAt: Date.parse(r.updated_at),
+    }
+    const g = spaced(r.validator_address).split(' ')
+    return {
+      address: r.validator_address, name: r.name || `${g[0]} ${g[1]} … ${g[g.length - 1]}`, fee: r.fee ?? 0, payoutType: r.payout_kind || 'unknown',
+      payoutSchedule: r.payout_schedule || '', isListed: !!r.listed, score: r.score, scoreStatus: r.score_status || 'no_score', balance: 0, stakers: 0, website: null,
+    }
+  })
+  const notes = rows.filter(r => !picked.includes(r) && r.payout_kind === 'direct').map(r => `${r.name ?? r.validator_address}: ${!r.active ? 'inactive on chain' : !r.elected ? 'not elected' : `score ${r.score_status}`}`)
+  return { list, rewards, stats, at, notes }
+}
+
 /** Reward address per validator, from the testnet active-validator read. */
 const testnetRewards: Record<string, string> = {}
 
@@ -155,6 +194,9 @@ export const useLive = defineStore('live', {
     poolsReady: false,
     /** Full-history scan for "Earned so far". */
     fullScan: { pages: 0, complete: false, running: false },
+    /** Where the pool list came from, and when the server computed it. */
+    poolSource: '' as '' | 'supabase' | 'client',
+    poolStatsAt: 0,
   }),
   getters: {
     active: () => { const w = useWallet(); return w.connected && !w.isMock },
@@ -308,15 +350,29 @@ export const useLive = defineStore('live', {
     async phaseB(gen: number, history: History) {
       const data = useData()
       if (!data.livePools.length) data.poolsState = 'loading'
-      const api = await Promise.allSettled([isTestnet ? testnetValidators() : directValidators(), status(), supply()])
+      // Supabase pool_stats first (computed every 15 min server side); the client-side
+      // computation below only runs when it is missing, older than an hour or unreachable.
+      const server = await serverPools()
       if (gen !== generation || !snap) return
-      const direct = api[0].status === 'fulfilled' ? api[0].value.value : []
-      const st = api[1].status === 'fulfilled' ? api[1].value.value : null
-      const gross = api[2].status === 'fulfilled' ? grossStakingApy(api[2].value.value) : snap.grossApy
+      this.poolSource = server ? 'supabase' : 'client'
+      this.poolStatsAt = server?.at ?? 0
+      const [dirR, stR, supR] = await Promise.allSettled([
+        server ? Promise.resolve(server.list) : (isTestnet ? testnetValidators() : directValidators()).then(r => r.value),
+        server ? Promise.resolve(null) : status().then(r => r.value),
+        supply().then(r => r.value),
+      ])
+      if (gen !== generation || !snap) return
+      const direct = dirR.status === 'fulfilled' ? dirR.value : []
+      const st = stR.status === 'fulfilled' ? stR.value : null
+      const gross = supR.status === 'fulfilled' ? grossStakingApy(supR.value) : snap.grossApy
       const elected = new Set((st?.elected || []).map(norm))
       const notes: string[] = []
       let healthy: Array<{ v: ApiValidator, info: { rewardAddress: string } | null }>
-      if (isTestnet) {
+      if (server) {
+        healthy = direct.map(v => ({ v, info: { rewardAddress: server.rewards[norm(v.address)] || v.address } }))
+        notes.push(...server.notes)
+      }
+      else if (isTestnet) {
         // Testnet: every active validator, with its reward address from the same RPC read.
         healthy = direct.map(v => ({ v, info: { rewardAddress: testnetRewards[norm(v.address)] || v.address } }))
       }
@@ -347,7 +403,7 @@ export const useLive = defineStore('live', {
         if (!v) v = (await knownValidators().then(r => r.value).catch(() => [] as ApiValidator[])).find(x => sameAddr(x.address, staker.delegation))
         const reward = userPool?.reward || healthy.find(h => sameAddr(h.v.address, staker.delegation))?.info?.rewardAddress || ''
         if (v) {
-          if (v.payoutType === 'direct' && reward && !userStats) userStats = await poolStats(reward).catch(() => null)
+          if (v.payoutType === 'direct' && reward && !userStats) userStats = server?.stats[norm(reward)] ?? await poolStats(reward).catch(() => null)
           userPool = toPool(v, reward, v.payoutType === 'direct' ? userStats : null, gross)
           if (isTestnet) userPool = testnetPool(userPool, v)
         }
@@ -355,14 +411,14 @@ export const useLive = defineStore('live', {
       const kickbacks = findKickbacks(s.address, history.txs, rewards)
       const next: Snapshot = { ...s, kickbacks, userPool, userStats, rewards, grossApy: gross, poolsNote: notes.join('; '), known: { ...s.known, ...(userPool ? { [userPool.id]: userPool } : {}) } }
       this.apply(next, 'keep')
-      this.loadPools(healthy.map(h => ({ v: h.v, reward: h.info!.rewardAddress })), gross, gen)
+      this.loadPools(healthy.map(h => ({ v: h.v, reward: h.info!.rewardAddress })), gross, gen, server?.stats)
     },
 
-    async loadPools(list: Array<{ v: ApiValidator, reward: string }>, gross: number | null, gen: number) {
+    async loadPools(list: Array<{ v: ApiValidator, reward: string }>, gross: number | null, gen: number, known?: Record<string, PoolStats>) {
       const data = useData()
       if (!list.length) { data.poolsState = snap?.pools.length ? 'ready' : 'error'; return }
       if (!data.livePools.length) data.poolsState = 'loading'
-      const results = await Promise.all(list.map(x => poolStats(x.reward).catch(() => null)))
+      const results = await Promise.all(list.map(x => known?.[norm(x.reward)] ?? poolStats(x.reward).catch(() => null)))
       if (gen !== generation || !snap) return
       const hidden: string[] = []
       const pools = list.map((x, i) => ({ x, s: results[i] }))

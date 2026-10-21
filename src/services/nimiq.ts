@@ -142,6 +142,20 @@ export async function connectAccount(): Promise<ConnectedAccount> {
   return { address }
 }
 
+/**
+ * Sign a text message with the wallet (Nimiq Pay shows it and asks first). The host signs
+ * SHA-256("\x16Nimiq Signed Message:\n" + byte length + message) with Ed25519 and returns
+ * hex strings (nimiq-pay-app useMiniAppHost.ts). Rejection throws a NimiqProviderError
+ * (see isUserRejection).
+ */
+export async function signMessage(message: string): Promise<{ publicKey: string, signature: string }> {
+  const nimiq = await getProvider()
+  if (typeof (nimiq as unknown as { sign?: unknown }).sign !== 'function') throw new Error('This Nimiq Pay version cannot sign messages.')
+  const r = await nimiq.sign(message)
+  if (!r || typeof r.publicKey !== 'string' || typeof r.signature !== 'string') throw new Error('Nimiq Pay returned no signature.')
+  return { publicKey: r.publicKey, signature: r.signature }
+}
+
 // ---------- sending ----------
 
 export type SubmitResult =

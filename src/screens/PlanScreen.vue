@@ -5,9 +5,11 @@ import PlanEditor from './PlanEditor.vue'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { removeRecipient, resetPlan } from '../flows'
+import { useSession } from '../stores/session'
 
 const plan = usePlan()
 const ui = useUi()
+const session = useSession()
 const rec = computed(() => plan.contact(plan.recipient))
 const hasRec = computed(() => plan.hasContacts && !!rec.value.id)
 </script>
@@ -20,6 +22,10 @@ const hasRec = computed(() => plan.hasContacts && !!rec.value.id)
         <button class="kb-link" style="color: var(--kb-text-2)" @click="resetPlan">Reset</button>
       </div>
       <h1 class="kb-h1" style="font-size: 44px">Your plan</h1>
+      <div v-if="session.offerSignIn" class="backup" data-kb="signin-banner">
+        <span>{{ session.status === 'expired' ? 'Sign in again to back up your plan' : 'Sign in to back up your plan' }}</span>
+        <button class="kb-link" style="flex: none" @click="session.signIn()">Sign in</button>
+      </div>
       <div class="people">
         <div class="kb-eyebrow">{{ plan.hasContacts ? 'Send slice goes to' : 'No one yet' }}</div>
         <div class="bubbles">
@@ -40,6 +46,7 @@ const hasRec = computed(() => plan.hasContacts && !!rec.value.id)
 </template>
 
 <style scoped>
+.backup { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 4px 4px 14px; border-radius: 16px; border: 1px solid var(--kb-line); background: var(--kb-surface); font-size: 14px; font-weight: 600; color: var(--kb-text-2); }
 .head { height: 52px; display: flex; align-items: center; justify-content: space-between; }
 .people { display: flex; flex-direction: column; gap: 12px; }
 .bubbles { display: flex; gap: 14px; overflow-x: auto; padding: 4px 4px 2px; margin: 0 -4px; scrollbar-width: none; }

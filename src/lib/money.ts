@@ -77,7 +77,15 @@ export function runAmount(readyLuna: number, balanceLuna: number): { amount: num
 /** `dry`: a dry-run fake. `manual`: a testnet test kickback marked in Diagnostics. Both count once a plan exists. */
 export interface KickbackLike { at: number, luna: number, restaked?: boolean, dry?: boolean, manual?: boolean }
 /** One shared (or kept) amount. `dry` entries come from dry-run runs and never count against real kickbacks. */
-export interface LedgerEntry { luna: number, at: number, hash?: string, dry?: boolean }
+export interface LedgerEntry {
+  luna: number
+  at: number
+  hash?: string
+  dry?: boolean
+  /** Stable id (uuid): the server's shares row id, so uploads are idempotent. */
+  id?: string
+  sliceType?: 'send' | 'restake' | 'keep'
+}
 
 /**
  * Ready to share = kickbacks that landed in the wallet after the plan started,

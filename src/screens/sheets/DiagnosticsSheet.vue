@@ -24,6 +24,8 @@ import type { DryOutcome } from '../../stores/dry'
 import { FEE_RESERVE_LUNA, parseNimInput, spendable } from '../../lib/money'
 import { isTestnet, net } from '../../lib/net'
 import { moneyLine, moneylog } from '../../lib/moneylog'
+import { useSession } from '../../stores/session'
+import { backendEnabled, backendUrl } from '../../services/backend'
 import { nim2 } from '../../lib/format'
 
 // Hidden diagnostics: what the SDK and the RPC actually returned.
@@ -45,6 +47,7 @@ function toggleDry() {
 }
 function setDryBalance() { dry.setBalance(parseNimInput(dryBal.value)); live.derive() }
 const plan = usePlan()
+const session = useSession()
 // A fake kickback lands in the fake wallet now and is ready to share (once a plan is saved).
 function addDryKickback() {
   const l = parseNimInput(dryKb.value)
@@ -139,6 +142,12 @@ const lines = computed(() => {
     ['RPC URL', net.rpcUrl],
     ['Validators API URL', net.validatorsApiUrl],
     ['Explorer', net.explorerTxUrl('<hash>')],
+    ['Backend', backendEnabled ? backendUrl.replace('https://', '') : 'not configured (local only)'],
+    ['Signed in', session.signedIn ? `yes · ${session.address} · ${net.network}` : `no · ${session.status}${!session.eligible ? ' (preview, dry run or not in Nimiq Pay: never signs in)' : ''}${session.error ? ` · ${session.error}` : ''}`],
+    ['Token expires', session.signedIn ? new Date(session.expiresAt).toLocaleString('en-GB') : 'n/a'],
+    ['Last sync', session.lastSyncAt ? `${ago(session.lastSyncAt)} (${new Date(session.lastSyncAt).toLocaleTimeString('en-GB')})` : 'never'],
+    ['Queued writes', session.queue.length ? `${session.queue.length}: ${session.queue.map(q => `${q.kind}${q.tries ? ` ×${q.tries + 1}` : ''}`).join(', ')}` : 'none'],
+    ['Pool list source', live.poolSource === 'supabase' ? `Supabase pool_stats, computed ${ago(live.poolStatsAt)}` : live.poolSource === 'client' ? 'computed on this phone (pool_stats missing, stale or unreachable)' : 'not loaded yet'],
     ['Detection', `${diag.detectMethod || 'n/a'} · ${ms(diag.detectMs)}`],
     ['init() resolved after', ms(diag.initMs)],
     ['getBalance available', window.nimiq ? (typeof (window.nimiq as unknown as Record<string, unknown>).getBalance === 'function' ? 'yes' : 'NO (update Nimiq Pay)') : 'n/a'],
@@ -270,6 +279,8 @@ async function again() {
     Run getBalance again
   </button>
   <button class="kb-btn ghost" @click="copy('diag', text)"><CopySwap :copied="copied === 'diag'" />Copy all</button>
+  <button v-if="session.signedIn" class="kb-btn ghost" @click="session.signOut()">Sign out</button>
+  <button v-else-if="session.offerSignIn" class="kb-btn ghost" @click="session.signIn()">Sign in</button>
 </template>
 
 <style scoped>

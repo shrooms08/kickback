@@ -28,6 +28,15 @@ export interface MarkedKickback { at: number, luna: number }
 interface Backup { contacts: Contact[], recipient: string | null, savedRecipient: string | null, saved: Split, pct: Split }
 
 let contactsBackup: Backup | null = null
+
+function newId(): string {
+  try { return crypto.randomUUID() }
+  catch {
+    const h = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0'))
+    h[6] = '4' + h[6][1]; h[8] = ((parseInt(h[8], 16) & 0x3f) | 0x80).toString(16)
+    return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10).join('')}`
+  }
+}
 let lastWritten = ''
 let subscribed = false
 
@@ -115,9 +124,29 @@ export const usePlan = defineStore('plan', {
       this.$subscribe(() => this.persist())
     },
     /** A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones. */
-    recordShared(luna: number, hash?: string, dry = false) {
-      if (luna <= 0) return
-      this.ledger.push({ luna, at: Date.now(), hash, ...(dry ? { dry: true } : {}) })
+    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep'): LedgerEntry | null {
+      if (luna <= 0) return null
+      const entry: LedgerEntry = { id: newId(), luna, at: Date.now(), hash, sliceType, ...(dry ? { dry: true } : {}) }
+      this.ledger.push(entry)
+      this.persist()
+      return entry
+    },
+    /** Undo a share (Keep instead): it is ready to share again. */
+    undoShared(id: string | undefined) {
+      if (!id) return
+      this.ledger = this.ledger.filter(e => e.id !== id)
+      this.persist()
+    },
+    /**
+     * Server data wins (sign-in merge, sync). Real (not dry-run) ledger entries are replaced
+     * by the server's shares; dry-run entries stay local.
+     */
+    applyServer(d: { contacts?: Contact[], saved?: Split, savedRecipient?: string | null, planStartedAt?: number | null, realLedger?: LedgerEntry[] }) {
+      if (d.contacts) this.contacts = d.contacts
+      if (d.saved) { this.saved = d.saved; this.pct = d.saved.slice() as Split }
+      if (d.savedRecipient !== undefined) { this.savedRecipient = d.savedRecipient; this.recipient = d.savedRecipient }
+      if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
+      if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
       this.persist()
     },
     /** Testnet: mark real NIM already in the wallet as a ready-to-share test kickback. */

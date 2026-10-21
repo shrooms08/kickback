@@ -19,10 +19,11 @@ export function freshAddress() {
 /**
  * `opts`: the wallet address the fake Nimiq Pay reports (default: a real mainnet
  * address with history), its network ('mainnet' default) and its getBalance (Luna, default 0).
- * A string is taken as the address.
+ * `signer(message)` (runs in Node) gives the fake provider a sign() returning { publicKey, signature }
+ * hex, or { error } to simulate a rejection. A string is taken as the address.
  */
 export async function setup(base, opts = {}) {
-  const { address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', network = 'mainnet', balanceLuna = 0 } = typeof opts === 'string' ? { address: opts } : opts
+  const { address = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', network = 'mainnet', balanceLuna = 0, signer = null } = typeof opts === 'string' ? { address: opts } : opts
   const results = []
   const log = (name, ok, extra = '') => { results.push({ name, ok, extra }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`) }
 
@@ -35,7 +36,8 @@ export async function setup(base, opts = {}) {
     userAgent: 'Mozilla/5.0 (Linux; Android 16; Seeker Build/BP2A.250605.031; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/155.0.7290.88 Mobile Safari/537.36',
   })
   // Pretend to be inside Nimiq Pay, with dry run on and an empty cache.
-  await context.addInitScript(({ address, network, balanceLuna }) => {
+  if (signer) await context.exposeFunction('__kbSign', signer)
+  await context.addInitScript(({ address, network, balanceLuna, hasSigner }) => {
     if (!sessionStorage.getItem('kb-e2e')) {
       sessionStorage.setItem('kb-e2e', '1')
       localStorage.clear()
@@ -45,8 +47,9 @@ export async function setup(base, opts = {}) {
     window.nimiq = {
       listAccounts: async () => [address],
       getBalance: async () => balanceLuna,
+      ...(hasSigner ? { sign: async m => window.__kbSign(typeof m === 'string' ? m : m.message) } : {}),
     }
-  }, { address, network, balanceLuna })
+  }, { address, network, balanceLuna, hasSigner: !!signer })
   // The sandboxed browser may not resolve DNS: relay every non-local request
   // (app host, Validators API, RPC) through Node so the app talks to the real services.
   await context.route(url => url.hostname !== 'localhost', async (route) => {
@@ -55,7 +58,11 @@ export async function setup(base, opts = {}) {
     try {
       let r
       for (let attempt = 0; ; attempt++) {
-        try { r = await fetch(req.url(), { method: req.method(), headers: req.method() === 'POST' ? { 'content-type': 'application/json' } : {}, body: req.method() === 'POST' ? req.postData() : undefined }); break }
+        // Forward the headers and body the app sent (auth for Supabase functions, apikey for REST).
+        const h = req.headers(), headers = {}
+        for (const k of ['content-type', 'authorization', 'apikey']) if (h[k]) headers[k] = h[k]
+        const hasBody = !['GET', 'HEAD'].includes(req.method())
+        try { r = await fetch(req.url(), { method: req.method(), headers, body: hasBody ? req.postData() : undefined }); break }
         catch (e) { if (attempt >= 8) throw e; await sleep(800 * (attempt + 1)) }
       }
       const body = Buffer.from(await r.arrayBuffer())
