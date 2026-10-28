@@ -13,6 +13,8 @@ import { useOps } from './stores/ops'
 import { syncRunSteps } from './money'
 import { startTapLog } from './lib/navlog'
 import { wireSession } from './stores/session'
+import { wireSeason } from './stores/season'
+import UnlockOverlay from './components/UnlockOverlay.vue'
 
 // Dev panel: only in dev builds with ?mock=1. Never part of a production bundle.
 const DevPanel = import.meta.env.DEV ? defineAsyncComponent(() => import('./dev/DevPanel.vue')) : null
@@ -42,6 +44,7 @@ onMounted(async () => {
   wireLiveClock()
   startTapLog()
   wireSession()
+  wireSeason()
   // Run / withdraw steps follow their ops (also after a restart).
   const ops = useOps()
   watch(() => ops.ops.map(o => o.phase + (o.slow ? '!' : '')).join(), () => syncRunSteps())
@@ -68,6 +71,7 @@ onBeforeUnmount(() => {
       <Stage />
       <div ref="fx" class="fx" />
       <BottomSheet />
+      <UnlockOverlay />
     </main>
     <component :is="DevPanel" v-if="DevPanel && wallet.isMock" />
   </div>

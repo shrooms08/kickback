@@ -15,8 +15,10 @@ const a = useAccount()
     <div class="item"><span class="n">2</span><span>You'll approve a few steps in Nimiq Pay: one to stop, one to move your NIM back.</span></div>
     <div class="item"><span class="n">3</span><span>Kickbacks stop once you start. We'll remind you when it's ready.</span></div>
   </div>
-  <button class="kb-btn kb-btn-primary" @click="ui.closeSheet()">Keep earning</button>
-  <button class="kb-btn kb-btn-danger" @click="confirmStop">Stop earning</button>
+  <div class="kb-actionbar on-surface" style="--kb-ab-pb: 28px" data-kb="action-bar">
+    <button class="kb-btn kb-btn-primary" @click="ui.closeSheet()">Keep earning</button>
+    <button class="kb-btn kb-btn-danger" @click="confirmStop">Stop earning</button>
+  </div>
 </template>
 
 <style scoped>

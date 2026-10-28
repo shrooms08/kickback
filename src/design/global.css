@@ -157,3 +157,21 @@ html[data-kb-rm='1'] *:not([data-kb-keep]) {
 }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Season: streak pill tick (1 -> 1.18 -> .95 -> 1) and the tier-up / unlock rise. */
+@keyframes kbTick { 0% { transform: scale(1); } 35% { transform: scale(1.18); } 65% { transform: scale(.95); } 100% { transform: scale(1); } }
+@keyframes kbRise { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+
+/* Pinned bottom action bar: stays on screen (sticky to the scroll view's bottom) with a fade
+   behind it, so the main action is never below the fold. The parent's bottom padding is
+   given back with a negative margin, so the bar sits flush at the bottom. */
+.kb-actionbar {
+  --kb-ab-pb: 24px;
+  position: sticky; bottom: 0; z-index: 5;
+  margin: auto -20px calc(-1 * (var(--kb-ab-pb) + var(--kb-safe-bottom)));
+  padding: 28px 20px calc(var(--kb-ab-pb) + var(--kb-safe-bottom));
+  background: linear-gradient(to top, var(--kb-bg) 74%, rgba(11, 13, 28, 0));
+  display: flex; flex-direction: column; gap: 10px;
+}
+/* Inside a bottom sheet the bar fades into the sheet's surface. */
+.kb-actionbar.on-surface { background: linear-gradient(to top, var(--kb-surface) 74%, rgba(22, 26, 48, 0)); padding-top: 18px; }

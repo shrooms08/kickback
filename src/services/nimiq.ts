@@ -66,6 +66,8 @@ export function toMessage(error: unknown): string {
 
 export interface ConnectedAccount {
   address: string
+  /** Every account Nimiq Pay listed, in its order (contracts included; the caller filters). */
+  accounts: string[]
 }
 
 // ---------- "Nimiq network is not ready" ----------
@@ -139,7 +141,7 @@ export async function connectAccount(): Promise<ConnectedAccount> {
   }
   const address = accounts[0]
   if (!address) throw new Error('No Nimiq account available.')
-  return { address }
+  return { address, accounts: accounts.slice() }
 }
 
 /**

@@ -85,6 +85,8 @@ export interface LedgerEntry {
   /** Stable id (uuid): the server's shares row id, so uploads are idempotent. */
   id?: string
   sliceType?: 'send' | 'restake' | 'keep'
+  /** The plan run this share belongs to (uuid). */
+  runId?: string
 }
 
 /**

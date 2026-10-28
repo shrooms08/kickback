@@ -21,6 +21,7 @@ export const PATHS: Record<ScreenName, string> = {
   success: '/success',
   run: '/run',
   withdraw: '/withdraw',
+  season: '/season',
 }
 
 /** Screens that work before a wallet is connected. */

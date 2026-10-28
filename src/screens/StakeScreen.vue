@@ -15,6 +15,8 @@ import { holdStakeDone } from '../flows'
 import { useUi } from '../stores/ui'
 import { checkStake, FEE_RESERVE_LUNA, maxStake, parseNimInput } from '../lib/money'
 import { sameAddr } from '../services/chain'
+import { usd } from '../lib/usd'
+import { rateText } from '../lib/rateText'
 
 const flow = useFlow()
 const account = useAccount()
@@ -73,6 +75,8 @@ const projection = computed(() => {
   return `About ${nim2(perKb)} NIM per kickback, about ${int0(Math.round(month))} NIM a month.`
 })
 
+const rateLine = computed(() => rateText(data.rateFor(flow.poolPick)))
+const usdLine = computed(() => data.isMock ? usd(n.value, NIM_USD) : '')
 const maxText = computed(() => live.value ? String(Math.floor(maxStake(wallet.effectiveBalanceLuna) / 1000) / 100) : String(Math.floor(bal.value * 100) / 100))
 const chips = computed(() => [['100', '100'], ['500', '500'], ['1,000', '1000'], ['Max', maxText.value]] as const)
 const title = computed(() => mode.value === 'add' ? `Add to stake with ${data.pool(flow.poolPick).name}` : `Stake with ${data.pool(flow.poolPick).name}`)
@@ -114,7 +118,7 @@ function press(k: string) {
           <span class="amt kb-num" :class="{ bad }" :style="{ fontSize: amtSize + 'px' }">{{ amtInt }}<span class="dec">{{ amtDec }}</span></span>
           <span class="unit">NIM</span>
         </div>
-        <div v-if="data.isMock" class="sub">about ${{ nim2(n * NIM_USD) }}</div>
+        <div v-if="usdLine" class="sub">about {{ usdLine }}</div>
         <div class="sub">{{ balLine }}</div>
       </div>
       <div class="chips">
@@ -122,7 +126,7 @@ function press(k: string) {
       </div>
       <div class="proj">
         <div class="proj-ico"><Icon name="trend" :size="18" :stroke="2.2" /></div>
-        <div class="proj-t">{{ projection }}</div>
+        <div class="proj-t">{{ projection }}<span v-if="rateLine" class="src"><br>{{ rateLine }} after the pool fee · <button class="info" data-kb="rate-info" @click="ui.openSheet('rate')">Nimiq staking calculator <Icon name="info" :size="14" /></button></span></div>
       </div>
       <div class="keys">
         <button v-for="k in KEYS" :key="k" class="key" :aria-label="k === 'del' ? 'Delete' : k" @click="press(k)">
@@ -130,10 +134,10 @@ function press(k: string) {
           <template v-else>{{ k }}</template>
         </button>
       </div>
-      <div class="foot">
+      <div class="kb-actionbar" style="--kb-ab-pb: 20px" data-kb="action-bar">
         <div v-if="reason" class="kb-reason">{{ reason }}</div>
         <HoldButton :label="mode === 'add' ? 'Hold to add' : 'Hold to stake'" :disabled="!!reason" @done="holdStakeDone" @blocked="shake(amountEl)" />
-        <button v-if="mode === 'other'" class="kb-btn kb-btn-ghost switch" @click="ui.openSheet('switch')">Switch pool</button>
+        <button v-if="mode === 'other'" class="kb-btn kb-btn-ghost" @click="ui.openSheet('switch')">Switch pool</button>
       </div>
     </div>
   </div>
@@ -160,6 +164,6 @@ function press(k: string) {
   transition: transform var(--kb-dur-press) var(--kb-ease);
 }
 .key:active { background: var(--kb-raised); transform: scale(var(--kb-press-scale)); }
-.foot { margin-top: auto; }
-.switch { margin-top: 10px; }
+.src { color: var(--kb-text-2); font-size: 13px; }
+.info { border: none; background: none; padding: 0; color: var(--kb-label); font: inherit; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
 </style>

@@ -55,17 +55,20 @@ export function validateContact(v: unknown, owner: string): ContactIn {
   if (!name || name.length > 40) fail('contact name must be 1 to 40 characters')
   if (typeof c!.contact_address !== 'string' || !isValidAddress(c!.contact_address)) fail('contact address is not a valid Nimiq address')
   if (normalizeAddress(c!.contact_address as string) === normalizeAddress(owner)) fail('a contact cannot be your own address')
+  if (normalizeAddress(c!.contact_address as string) === 'NQ7700000000000000000000000000000001') fail('a contact cannot be the staking contract')
   const a = normalizeAddress(c!.contact_address as string)
   return { id: id as string, name, contact_address: a.replace(/(.{4})/g, '$1 ').trim() }
 }
 
-export interface ShareIn { id: string, amount_luna: number, slice_type: SliceType, tx_hash: string | null, status: 'confirmed' | 'undone' }
+export interface ShareIn { id: string, amount_luna: number, slice_type: SliceType, tx_hash: string | null, status: 'confirmed' | 'undone', run_id: string | null }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** A processed share: uuid id (idempotent upsert), positive Luna, slice type, hash for send/restake. */
 export function validateShare(v: unknown): ShareIn {
   const s = v as Record<string, unknown> | null
   if (!s || typeof s !== 'object') fail('share must be an object')
-  if (typeof s!.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s!.id)) fail('share id must be a uuid')
+  if (typeof s!.id !== 'string' || !UUID.test(s!.id)) fail('share id must be a uuid')
+  if (s!.run_id != null && (typeof s!.run_id !== 'string' || !UUID.test(s!.run_id))) fail('run_id must be a uuid')
   const amount = positiveLuna(s!.amount_luna)
   if (!SLICE_TYPES.includes(s!.slice_type as SliceType)) fail('slice_type must be send, restake or keep')
   const hash = s!.tx_hash == null ? null : s!.tx_hash
@@ -73,15 +76,22 @@ export function validateShare(v: unknown): ShareIn {
   if (s!.slice_type !== 'keep' && !hash) fail('send and restake shares need a tx_hash')
   const status = s!.status ?? 'confirmed'
   if (status !== 'confirmed' && status !== 'undone') fail('status must be confirmed or undone')
-  return { id: (s!.id as string).toLowerCase(), amount_luna: amount, slice_type: s!.slice_type as SliceType, tx_hash: hash as string | null, status: status as 'confirmed' | 'undone' }
+  return { id: (s!.id as string).toLowerCase(), amount_luna: amount, slice_type: s!.slice_type as SliceType, tx_hash: hash ? (hash as string).toLowerCase() : null, status: status as 'confirmed' | 'undone', run_id: s!.run_id ? (s!.run_id as string).toLowerCase() : null }
 }
 
-export function validateEvent(v: unknown): { kind: EventKind, amount_luna: number | null } {
+/** Stake events may carry the stake's tx hash (verified on chain before it counts). */
+export function validateEvent(v: unknown): { kind: EventKind, amount_luna: number | null, tx_hash: string | null } {
   const e = v as Record<string, unknown> | null
   if (!e || typeof e !== 'object') fail('event must be an object')
   if (!EVENT_KINDS.includes(e!.kind as EventKind)) fail('unknown event kind')
   const amount = e!.amount_luna == null ? null : positiveLuna(e!.amount_luna)
-  return { kind: e!.kind as EventKind, amount_luna: amount }
+  let hash: string | null = null
+  if (e!.tx_hash != null) {
+    if (e!.kind !== 'stake' && e!.kind !== 'add_stake') fail('only stake events carry a tx_hash')
+    if (typeof e!.tx_hash !== 'string' || !/^[0-9a-f]{64}$/i.test(e!.tx_hash)) fail('tx_hash must be 64 hex characters')
+    hash = (e!.tx_hash as string).toLowerCase()
+  }
+  return { kind: e!.kind as EventKind, amount_luna: amount, tx_hash: hash }
 }
 
 export function validateNetwork(v: unknown): 'mainnet' | 'testnet' {

@@ -22,6 +22,8 @@ export interface RunStep {
   opId?: string
   /** Still confirming after 2 minutes. */
   slow?: boolean
+  /** One id per run: the server groups shares by it to count runs. */
+  runId?: string
 }
 
 /** Short-lived state of the money flows: stake amount, approvals, errors, Run my plan. */

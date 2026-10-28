@@ -200,6 +200,7 @@ function request(to: ScreenName) {
   if (type === 'modalIn') { base = from; leaving = null }
   else if (type === 'modalSwap') base = from === 'approve' && to === 'success' ? 'home' : nav.base
   if (to === 'pools' && isTab(from)) nav.poolsFrom = from
+  if (to === 'season' && isTab(from)) nav.seasonFrom = from
   lock(`${type} ${from}→${to}`, 1000)
   logNav(`${type} ${from}→${to}`)
   nav.$patch({ screen: to, base, leaving, ltype: type, busy: true, gestureUnder: null })
@@ -291,7 +292,7 @@ function runTransition(type: TransitionType, from: ScreenName, to: ScreenName) {
 function edgeDown(e: PointerEvent) {
   if (nav.busy || nav.gestureUnder || isLocked() || ui.rm || !nav.screen || !DEPTH[nav.screen]) return
   const top = nav.screen
-  const under: ScreenName = top === 'stake' ? 'pools' : (nav.poolsFrom || 'homeEmpty')
+  const under: ScreenName = top === 'stake' ? 'pools' : top === 'season' ? (nav.seasonFrom || 'home') : (nav.poolsFrom || 'homeEmpty')
   try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }
   catch { /* ignore */ }
   const x0 = e.clientX

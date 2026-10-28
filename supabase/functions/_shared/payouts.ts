@@ -41,7 +41,9 @@ const norm = (a: string) => a.replace(/\s+/g, '').toUpperCase()
  * JSON-RPC with the public node's budget: about 20 units per 10 s per IP; history reads with
  * max > 100 cost 5. This client spends at most `budget` units per 10 s and waits on 429.
  */
-export function createRpc(url: string, budget = 14) {
+/** `retry429: false` (user-facing reads): a 429 fails at once instead of sleeping and retrying. */
+export function createRpc(url: string, budget = 14, opts: { retry429?: boolean } = {}) {
+  const retry429 = opts.retry429 ?? true
   let tokens = budget, last = Date.now(), units = 0, calls = 0
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   async function take(cost: number) {
@@ -58,11 +60,11 @@ export function createRpc(url: string, budget = 14) {
     for (let attempt = 0; ; attempt++) {
       await take(cost)
       calls++; units += cost
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }) })
-      if (res.status === 429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
+      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) })
+      if (res.status === 429 && retry429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
       if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
       const body = await res.json()
-      if (body.error) throw new Error(`${method}: ${body.error.message ?? JSON.stringify(body.error)}`)
+      if (body.error) throw new Error(rpcErrorText(method, body.error))
       return body.result?.data as T
     }
   }
@@ -70,6 +72,12 @@ export function createRpc(url: string, budget = 14) {
 }
 
 export type Rpc = ReturnType<typeof createRpc>
+
+/** The node puts the useful part ("No staker with address …") in error.data: keep it. */
+export function rpcErrorText(method: string, e: { message?: string, data?: unknown }): string {
+  const data = typeof e.data === 'string' ? e.data : e.data != null ? JSON.stringify(e.data) : ''
+  return `${method}: ${e.message ?? 'error'}${data ? `: ${data}` : ''}`
+}
 
 export interface PayoutStats { lastPaidAt: number | null, intervalH: number | null, batches: number[], source: 'probe' | 'scan' | 'none', probe?: string }
 

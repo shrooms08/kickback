@@ -18,12 +18,16 @@ import { ago, span, now } from '../lib/time'
 import { nim2, nimParts } from '../lib/format'
 import { ranksOf, splitCents } from '../lib/plan'
 import { goAddContact, goPlan, goPoolTab, shareNow } from '../flows'
+import { usd } from '../lib/usd'
+import { collecting } from '../lib/minReady'
+import { useUi } from '../stores/ui'
 import { go } from '../router'
 
 const a = useAccount()
 const plan = usePlan()
 const data = useData()
 const wallet = useWallet()
+const ui = useUi()
 const live = computed(() => !wallet.isMock)
 const stakedParts = computed(() => nimParts(a.stakedNim))
 // Wallet: the fake balance in dry run, RPC getAccountByAddress in preview, getBalance otherwise.
@@ -62,11 +66,16 @@ const headline = computed(() => {
   if (firstPending.value) return `First kickback in ${a.nextIn}`
   return a.nextIn ? `Next kickback in ${a.nextIn}` : 'Waiting for your first kickback'
 })
-const earnedSub = computed(() => live.value ? `from ${a.kbCount} kickback${a.kbCount === 1 ? '' : 's'}` : `about $${nim2(a.earnedNim * NIM_USD)} · from ${a.kbCount} kickbacks`)
+// Dollars only in mock (no live price), and never below $0.01.
+const dollars = (nim: number) => { const u = live.value ? '' : usd(nim, NIM_USD); return u ? `about ${u} · ` : '' }
+const earnedSub = computed(() => live.value ? `from ${a.kbCount} kickback${a.kbCount === 1 ? '' : 's'}` : `${dollars(a.earnedNim)}from ${a.kbCount} kickbacks`)
+// Run when ready reaches: something is ready but less than the plan's minimum.
+const readyLunaNow = computed(() => live.value ? a.readyLuna : a.readyCents * 1000)
+const coll = computed(() => collecting(readyLunaNow.value, plan.minReadyLuna))
 const readySub = computed(() => {
   if (live.value && plan.planStartedAt == null) return 'Save your plan to start sharing'
   if (!a.readyCents) return 'Nothing to share yet'
-  return live.value ? `${a.waiting} kickback${a.waiting === 1 ? '' : 's'} waiting` : `about $${nim2(a.readyNim * NIM_USD)} · ${a.waiting} kickbacks waiting`
+  return live.value ? `${a.waiting} kickback${a.waiting === 1 ? '' : 's'} waiting` : `${dollars(a.readyNim)}${a.waiting} kickbacks waiting`
 })
 
 const srec = computed(() => plan.contact(plan.savedRecipient))
@@ -96,7 +105,7 @@ const poolPaid = computed(() => {
       <AppHeader />
 
       <div v-if="mode === 'normal'" class="block14">
-        <h1 class="kb-h1">{{ headline }}</h1>
+        <div class="hl"><h1 class="kb-h1">{{ headline }}</h1><button class="bell kb-press" aria-label="Remind me" data-kb="bell" @click="ui.openSheet('remind')"><Icon name="bell" :size="20" /></button></div>
         <SegmentedBar :segments="12" :value="a.hours" pulse size="lg" />
         <div class="meta between"><span>{{ a.lastPaid }}</span><span>{{ a.dueAt }}</span></div>
       </div>
@@ -130,9 +139,13 @@ const poolPaid = computed(() => {
           <div class="ready-l">
             <div class="kb-eyebrow">Ready to share</div>
             <NimAmount id="ready" :value="a.readyNim" :size="32" :dec-size="20" :unit-size="14" :gap="6" ls="-0.04em" :lh="1" amt-attr="ready-amt" />
-            <div class="meta">{{ readySub }}</div>
+            <div v-if="!coll.on" class="meta">{{ readySub }}</div>
           </div>
-          <button class="share kb-press" :class="{ off: !a.readyCents }" @click="shareNow">Share now</button>
+          <button class="share kb-press" :class="{ off: !a.readyCents || coll.on }" @click="shareNow">Share now</button>
+        </div>
+        <div v-if="coll.on" class="coll" data-kb="collecting">
+          <div class="cbar"><div class="cfill" :style="{ transform: `scaleX(${coll.pct / 100})` }" /></div>
+          <div class="meta">Collecting: {{ coll.have }} of {{ coll.need }} NIM. Your plan runs once {{ coll.need }} NIM is ready.</div>
         </div>
         <TheStack v-bind="stack" size="home" />
       </div>
@@ -180,6 +193,12 @@ const poolPaid = computed(() => {
 
 <style scoped>
 .block14 { display: flex; flex-direction: column; gap: 14px; }
+.hl { display: flex; align-items: flex-start; gap: 10px; }
+.hl .kb-h1 { flex: 1; min-width: 0; }
+.bell { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--kb-line); background: transparent; color: var(--kb-text); display: grid; place-items: center; flex: none; }
+.coll { display: flex; flex-direction: column; gap: 8px; padding: 0 6px; }
+.cbar { height: 8px; border-radius: 999px; background-color: var(--kb-raised); background-image: var(--kb-hatch-seg); background-size: 48px 48px; overflow: hidden; }
+.cfill { height: 100%; background: var(--kb-lime); transform-origin: left; transition: transform 300ms var(--kb-ease); }
 .block8 { display: flex; flex-direction: column; gap: 8px; }
 .block10 { display: flex; flex-direction: column; gap: 10px; }
 .block12 { display: flex; flex-direction: column; gap: 12px; }

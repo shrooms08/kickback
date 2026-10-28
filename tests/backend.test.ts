@@ -113,7 +113,7 @@ describe('contact, share and event validation', () => {
     expect(() => validateShare({ id, amount_luna: 250_000, slice_type: 'send' })).toThrow('tx_hash')
     expect(() => validateShare({ id: 'nope', amount_luna: 1, slice_type: 'keep' })).toThrow('uuid')
     expect(validateShare({ id, amount_luna: 1, slice_type: 'keep', status: 'undone' }).status).toBe('undone')
-    expect(validateEvent({ kind: 'stake', amount_luna: 10_000_000 })).toEqual({ kind: 'stake', amount_luna: 10_000_000 })
+    expect(validateEvent({ kind: 'stake', amount_luna: 10_000_000 })).toEqual({ kind: 'stake', amount_luna: 10_000_000, tx_hash: null })
     expect(() => validateEvent({ kind: 'hack' })).toThrow(ValidationError)
   })
 })

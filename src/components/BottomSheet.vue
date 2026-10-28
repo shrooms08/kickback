@@ -10,13 +10,17 @@ import FeesSheet from '../screens/sheets/FeesSheet.vue'
 import HelpSheet from '../screens/sheets/HelpSheet.vue'
 import DiagnosticsSheet from '../screens/sheets/DiagnosticsSheet.vue'
 import SwitchSheet from '../screens/sheets/SwitchSheet.vue'
+import WalletsSheet from '../screens/sheets/WalletsSheet.vue'
+import RemindSheet from '../screens/sheets/RemindSheet.vue'
+import RateSheet from '../screens/sheets/RateSheet.vue'
+import ShareSheet from '../screens/sheets/ShareSheet.vue'
 
 // Bottom sheets: slide up 320ms, slide down 260ms, drag the handle or title
 // down past 25% of the height (or flick) to dismiss. Tap the backdrop to close.
 const ui = useUi()
 const sheetEl = ref<HTMLElement>()
 const backdropEl = ref<HTMLElement>()
-const CONTENT = { add: AddSomeoneSheet, stop: StopEarningSheet, fees: FeesSheet, help: HelpSheet, diag: DiagnosticsSheet, switch: SwitchSheet }
+const CONTENT = { add: AddSomeoneSheet, stop: StopEarningSheet, fees: FeesSheet, help: HelpSheet, diag: DiagnosticsSheet, switch: SwitchSheet, wallets: WalletsSheet, remind: RemindSheet, rate: RateSheet, share: ShareSheet }
 
 let closing = false
 let queued: Array<() => void> = []

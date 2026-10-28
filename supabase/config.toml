@@ -428,3 +428,6 @@ verify_jwt = false
 
 [functions.stats]
 verify_jwt = false
+
+[functions.season]
+verify_jwt = false

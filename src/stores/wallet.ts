@@ -2,10 +2,13 @@ import { defineStore } from 'pinia'
 import { connectAccount, detectNimiqPay, hasHostContext, isUserRejection, readBalance, toMessage } from '../services/nimiq'
 import { useDiag } from './diag'
 import { MOCK_ADDRESS, MOCK_BALANCE_NIM, MOCK_CONNECT_MS } from '../services/mock'
+
+const MOCK_SECOND_ADDRESS = 'NQ07 A3J0 7SUY 2C29 MU2T KVXF RMYV 1SE5'
 import { isNimiqAddress, lunaToNim, nimToLuna } from '../lib/format'
 import { cacheGet, cacheSet, prefGet, prefSet } from '../lib/cache'
 import { useDry } from './dry'
-import { getAccountBalance, spaced } from '../services/chain'
+import { getAccountBalance, getAccountType, spaced } from '../services/chain'
+import { pickBasic } from '../lib/wallets'
 
 /**
  * detecting:  waiting to see if Nimiq Pay injects the provider
@@ -51,6 +54,8 @@ export const useWallet = defineStore('wallet', {
     /** Where the wallet balance came from; '' = not known yet (never show a fake 0). */
     balanceSource: '' as '' | 'sdk' | 'rpc' | 'cache',
     balanceError: '',
+    /** Basic (non-contract) accounts Nimiq Pay listed. More than one: "Choose wallet". */
+    basicAccounts: [] as string[],
   }),
   getters: {
     isMock: s => s.env === 'mock',
@@ -97,7 +102,8 @@ export const useWallet = defineStore('wallet', {
       this.balanceLuna = nimToLuna(MOCK_BALANCE_NIM)
       this.connected = true
       const diag = useDiag()
-      diag.accounts = [MOCK_ADDRESS]
+      this.basicAccounts = [MOCK_ADDRESS, MOCK_SECOND_ADDRESS]
+      diag.accounts = [MOCK_ADDRESS, MOCK_SECOND_ADDRESS]
       diag.listAccountsMs = 0
       diag.recordBalance(this.balanceLuna, 0)
     },
@@ -167,7 +173,16 @@ export const useWallet = defineStore('wallet', {
       }
       try {
         const account = await connectAccount()
-        this.address = account.address
+        // Kickback acts as the account Nimiq Pay pays from (the first one). Other basic accounts
+        // are offered read only; contracts (vesting, HTLC) are skipped. Types are read in the
+        // background so a slow RPC never holds up Connect.
+        this.address = account.accounts[0]
+        this.basicAccounts = [account.accounts[0]]
+        if (account.accounts.length > 1) {
+          const types: Record<string, string | null> = {}
+          void Promise.all(account.accounts.slice(1).map(async (a) => { types[a] = await getAccountType(a) }))
+            .then(() => { if (this.address === account.accounts[0]) this.basicAccounts = pickBasic(account.accounts, types).basic })
+        }
         this.connected = true
         this.balanceSource = ''
         this.refreshWalletBalance()

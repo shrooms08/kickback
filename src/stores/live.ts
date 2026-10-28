@@ -15,7 +15,7 @@ import {
   learnProbe, norm, payoutClock, poolStats, sameAddr, spaced, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
 } from '../services/chain'
 import type { EpochClock, History, Kickback, PoolStats, Staker, Tx } from '../services/chain'
-import { directValidators, grossStakingApy, knownValidators, status, supply } from '../services/validators'
+import { calculatorGross, directValidators, knownValidators, stakedRatio, status, supply } from '../services/validators'
 import type { ApiValidator } from '../services/validators'
 import { cacheGet, cacheSet, pruneCache } from '../lib/cache'
 import { ledgerFor, readyLuna } from '../lib/money'
@@ -359,12 +359,12 @@ export const useLive = defineStore('live', {
       const [dirR, stR, supR] = await Promise.allSettled([
         server ? Promise.resolve(server.list) : (isTestnet ? testnetValidators() : directValidators()).then(r => r.value),
         server ? Promise.resolve(null) : status().then(r => r.value),
-        supply().then(r => r.value),
+        supply().then(r => stakedRatio(r.value), () => stakedRatio(null)),
       ])
       if (gen !== generation || !snap) return
       const direct = dirR.status === 'fulfilled' ? dirR.value : []
       const st = stR.status === 'fulfilled' ? stR.value : null
-      const gross = supR.status === 'fulfilled' ? grossStakingApy(supR.value) : snap.grossApy
+      const gross = supR.status === 'fulfilled' && supR.value ? calculatorGross(supR.value.ratio) : snap.grossApy
       const elected = new Set((st?.elected || []).map(norm))
       const notes: string[] = []
       let healthy: Array<{ v: ApiValidator, info: { rewardAddress: string } | null }>

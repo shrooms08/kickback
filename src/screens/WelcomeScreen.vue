@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import KLogo from '../components/KLogo.vue'
 import { connectWallet } from '../flows'
+import { invitedBy } from '../lib/ref'
+
+const invite = invitedBy()
 </script>
 
 <template>
@@ -27,6 +30,7 @@ import { connectWallet } from '../flows'
       </div>
       <div class="cta">
         <button class="kb-btn kb-btn-primary connect" @click="connectWallet">Connect wallet</button>
+        <div v-if="invite" class="invite" data-kb="invited-by"><span class="dot" style="background: var(--kb-lime)" />Invited by <b>{{ invite }}</b></div>
         <div class="hint">You'll approve in Nimiq Pay.</div>
       </div>
     </div>
@@ -53,4 +57,6 @@ import { connectWallet } from '../flows'
 .cta { position: relative; display: flex; flex-direction: column; gap: 14px; align-items: center; }
 .connect { box-shadow: var(--kb-sh-lime-glow), 0 10px 30px rgba(200, 240, 74, .18); }
 .hint { font-size: 14px; color: var(--kb-text-2); }
+.invite { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--kb-text-2); }
+.invite b { color: var(--kb-text); letter-spacing: .04em; }
 </style>
