@@ -103,6 +103,7 @@ npm run build      # vue-tsc type check + production build
 - `supabase/migrations`, `supabase/functions`
 - `design/Kickback Prototype.html`: the design source of truth
 - `docs/`: SDK notes, staking lifecycle, data notes, backend, testnet
+- `docs/spike/`: the read-only research spike done before the build (report and helper scripts)
 
 ## License
 

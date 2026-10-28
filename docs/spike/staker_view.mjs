@@ -1,7 +1,11 @@
 // From the staker's side: does a cheap getTransactionsByAddress(stakerAddr) show pool payouts?
 import { rpc, stats } from './rpc.mjs'
 import { writeFileSync } from 'node:fs'
-const cases = [['NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5', 'NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV'], ['NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E', 'NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717']]
+// Usage: node staker_view.mjs "<staker address>" "<pool payout address>" [more pairs ...]
+const args = process.argv.slice(2)
+if (!args.length || args.length % 2) { console.error('usage: node staker_view.mjs "<staker>" "<payout address>" ...'); process.exit(1) }
+const cases = []
+for (let i = 0; i < args.length; i += 2) cases.push([args[i], args[i + 1]])
 const res = {}
 for (const [staker, payer] of cases) {
   const t = await rpc('getTransactionsByAddress', [staker, 50, null])
