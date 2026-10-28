@@ -1,7 +1,8 @@
 // Season XP against the LOCAL stack only (it writes test rows straight into the local database
 // through `docker exec … psql`): daily stake XP once a day however often the season is read,
 // runs and shares capped at 2 per UTC day, a run only after a kickback, quests once a week,
-// tiers and tier skins, xp-cron refuses calls without the cron secret.
+// tiers and tier skins, xp-cron refuses calls without the cron secret, and with it snapshots only
+// wallets with a plan or an active stake, going on from a cursor kept in the database.
 // Usage: node e2e/xp-api.mjs   (needs `supabase start` + `supabase functions serve`)
 import { execFileSync } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -128,6 +129,23 @@ const proofOut = execFileSync('docker', ['exec', '-i', 'supabase_db_kickback', '
 end $$;`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
 log('ledger: a second stake row for the same day is refused', !dupOut.includes('ACCEPTED'))
 log('ledger: the same run can never earn twice (proof unique)', !proofOut.includes('ACCEPTED'))
+
+// xp-cron (audit 10): only wallets with a plan or an active stake, from a persistent cursor.
+// Every other local testnet wallet gets today's snapshot first, so the run only looks at these three.
+const withPlan = await signIn(), withStake = await signIn(), idle = await signIn()
+const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10)
+sql(`insert into public.plans (address, network, slices) values ('${withPlan.address}', 'testnet', '[{"type":"keep","percent":100,"contact_id":null}]');
+insert into public.stake_snapshots (address, network, day, active_luna) values ('${withStake.address}', 'testnet', '${yesterday}', 500000);
+insert into public.stake_snapshots (address, network, day, active_luna) select address, network, '${today}', 0 from public.users where network = 'testnet' and address not in ('${withPlan.address}', '${withStake.address}', '${idle.address}') on conflict do nothing;
+insert into public.cron_cursors (name, cursor) values ('xp-testnet', 'NQ99 ZZZZ') on conflict (name) do update set cursor = excluded.cursor;`)
+const cronSecret = sql(`select decrypted_secret from vault.decrypted_secrets where name = 'kickback_cron_secret';`)
+const cron = await call('xp-cron?network=testnet', { headers: { 'x-cron-secret': cronSecret } })
+const snapped = sql(`select string_agg(address, ',') from public.stake_snapshots where network = 'testnet' and day = '${today}' and address in ('${withPlan.address}', '${withStake.address}', '${idle.address}');`)
+log('xp-cron snapshots a wallet with a plan and one with an active stake', cron.status === 200 && snapped.includes(withPlan.address) && snapped.includes(withStake.address), `HTTP ${cron.status} ${JSON.stringify(cron.data)}`)
+log('xp-cron skips a wallet with neither (no RPC spent on it)', !snapped.includes(idle.address))
+log('xp-cron wraps its cursor at the end of the list and stores it', sql(`select cursor from public.cron_cursors where name = 'xp-testnet';`) === '')
+const again = await call('xp-cron?network=testnet', { headers: { 'x-cron-secret': cronSecret } })
+log('a second run the same day has nothing left to do', again.status === 200 && again.data.done === 0 && again.data.failed === 0, JSON.stringify(again.data))
 
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
 process.exit(results.every(Boolean) ? 0 : 1)
