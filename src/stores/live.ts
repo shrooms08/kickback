@@ -11,7 +11,7 @@ import { router } from '../router'
 import type { Pool } from '../services/mock'
 import { checkEndpoints, rpc } from '../services/rpc'
 import {
-  STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, firstKickbackAt, getAccountBalance, getActiveValidators, getStaker, getValidator,
+  STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, rewardOf, firstKickbackAt, getAccountBalance, getActiveValidators, getStaker, getValidator,
   learnProbe, norm, payoutClock, poolStats, sameAddr, spaced, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
 } from '../services/chain'
 import type { EpochClock, History, Kickback, PoolStats, Staker, Tx } from '../services/chain'
@@ -141,9 +141,13 @@ async function serverPools(): Promise<{ list: ApiValidator[], rewards: Record<st
   const at = Math.max(...rows.map(r => Date.parse(r.updated_at)))
   if (!(Date.now() - at < H)) return null
   const picked = rows.filter(r => r.active && (isTestnet || (r.payout_kind === 'direct' && r.elected && r.score_status === 'current')))
+  // Nothing usable (e.g. the cron couldn't read validators): compute the list on the phone instead.
+  if (!picked.length) return null
   const rewards: Record<string, string> = {}, stats: Record<string, PoolStats> = {}
-  const list = picked.map((r): ApiValidator => {
-    const reward = r.reward_address || r.validator_address
+  // Rows written while the cron couldn't read validators have no reward address: fill from probes.
+  const filled = await Promise.all(picked.map(r => (r.reward_address ? Promise.resolve(r.reward_address) : rewardOf(r.validator_address).catch(() => null))))
+  const list = picked.map((r, i): ApiValidator => {
+    const reward = filled[i] || r.validator_address
     rewards[norm(r.validator_address)] = reward
     const lastPaidAt = r.last_payout_at ? Date.parse(r.last_payout_at) : null
     stats[norm(reward)] = {
@@ -275,7 +279,7 @@ export const useLive = defineStore('live', {
         let userPool: Pool | null = null
         if (staker?.delegation) {
           const prev = prevKnown[staker.delegation] ?? Object.values(prevKnown).find(p => sameAddr(p.validator, staker.delegation))
-          userReward = prev?.reward || (await getValidator(staker.delegation).then(r => r.value.rewardAddress).catch(() => ''))
+          userReward = prev?.reward || (await rewardOf(staker.delegation).catch(() => null)) || ''
           userPool = placeholderPool(staker.delegation, userReward, prev)
         }
         const rewards = [...new Set([...(snap?.rewards ?? []), ...(userReward ? [userReward] : [])])]
@@ -394,7 +398,11 @@ export const useLive = defineStore('live', {
           if (v.scoreStatus !== 'current') { notes.push(`${v.name}: score ${v.scoreStatus}`); return false }
           return true
         })
-        const infos = await Promise.all(candidates.map(v => getValidator(v.address).then(r => r.value).catch(() => null)))
+        // Validator lookups need a JSON-RPC node; without one, a probe-derived reward address stands in.
+        const infos = await Promise.all(candidates.map(v => getValidator(v.address).then(r => r.value).catch(async () => {
+          const rewardAddress = await rewardOf(v.address).catch(() => null)
+          return rewardAddress ? { address: v.address, rewardAddress, inactivityFlag: null, retired: false, jailedFrom: null } as unknown as Awaited<ReturnType<typeof getValidator>>['value'] : null
+        })))
         if (gen !== generation || !snap) return
         healthy = candidates.map((v, i) => ({ v, info: infos[i] })).filter(({ v, info }) => {
           if (!info) { notes.push(`${v.name}: validator lookup failed`); return false }

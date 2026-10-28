@@ -64,3 +64,10 @@ describe('what counts as an endpoint failure', () => {
     expect(classifyFailure({ status: 400, json: true, rpcError: 'Invalid params' })).toBe('answer')
   })
 })
+
+describe('REST fallback in the pool', () => {
+  it('order: direct nodes, then the REST fallback, then the proxy', () => {
+    const pool = new EndpointPool([A, B], { now: () => 0, rest: 'https://rest.example', proxy: P })
+    expect(pool.order().map(e => e.kind)).toEqual(['direct', 'direct', 'rest', 'proxy'])
+  })
+})

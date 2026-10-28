@@ -1,10 +1,10 @@
 // Ordered RPC endpoint list with failover (pure; shared by the app's RPC client and tested).
 // The first healthy endpoint is used. An endpoint that fails (network error, timeout, 5xx,
 // 429, a body that isn't JSON) is skipped for 60 s, then tried again. A valid JSON-RPC answer
-// is never a failure, even an error such as "No staker with address". The proxy (our Supabase
-// rpc-proxy) always comes last.
+// is never a failure, even an error such as "No staker with address". Order: the JSON-RPC nodes,
+// then a REST fallback (Nimiq.Watch, for the methods it can answer), then our Supabase rpc-proxy.
 
-export type EndpointKind = 'direct' | 'proxy'
+export type EndpointKind = 'direct' | 'rest' | 'proxy'
 export interface Endpoint { url: string, kind: EndpointKind }
 export interface EndpointStatus { url: string, kind: EndpointKind, state: 'ok' | 'down' | 'unknown', lastError: string, latencyMs: number | null }
 
@@ -15,10 +15,14 @@ export class EndpointPool {
   private now: () => number
   private retryMs: number
 
-  constructor(urls: string[], opts: { now?: () => number, proxy?: string | null, retryMs?: number } = {}) {
+  constructor(urls: string[], opts: { now?: () => number, rest?: string | null, proxy?: string | null, retryMs?: number } = {}) {
     this.now = opts.now ?? Date.now
     this.retryMs = opts.retryMs ?? RETRY_AFTER_MS
-    const all: Endpoint[] = [...urls.map(url => ({ url, kind: 'direct' as const })), ...(opts.proxy ? [{ url: opts.proxy, kind: 'proxy' as const }] : [])]
+    const all: Endpoint[] = [
+      ...urls.map(url => ({ url, kind: 'direct' as const })),
+      ...(opts.rest ? [{ url: opts.rest, kind: 'rest' as const }] : []),
+      ...(opts.proxy ? [{ url: opts.proxy, kind: 'proxy' as const }] : []),
+    ]
     this.list = all.map(e => ({ ...e, downUntil: 0, state: 'unknown', lastError: '', latencyMs: null }))
   }
 

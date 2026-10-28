@@ -294,6 +294,27 @@ const SEED_PROBES: Record<string, string[]> = {
   'NQ155JNSU7CERAH53T02F8A9JCT6QMG97TSV': ['NQ11 NMR7 4E14 CD4Q 3YEQ DJ67 5L6G YAM7 RNF4', 'NQ47 P7A4 FB6L FCG1 LGU9 B8UE AXV8 ADH8 5XVR'],
 }
 
+/**
+ * A validator's reward address: from getValidatorByAddress, or, when that can't be read (no
+ * JSON-RPC node up; the REST fallback has no validator route), from a known probe staker of a
+ * direct pool: it delegates to the validator and is paid from the reward address.
+ */
+export async function rewardOf(validator: string): Promise<string | null> {
+  try { return (await getValidator(validator)).value.rewardAddress || null }
+  catch { /* try the probes */ }
+  for (const [reward, probes] of Object.entries(SEED_PROBES)) {
+    for (const p of [...probes, ...learnedProbes(reward)]) {
+      try {
+        const st = (await getStaker(p, 24 * H)).value
+        if (st?.delegation && sameAddr(st.delegation, validator)) return spaced(reward)
+        if (st?.delegation) break
+      }
+      catch { /* next probe */ }
+    }
+  }
+  return null
+}
+
 function learnedProbes(reward: string): string[] {
   try { return JSON.parse(prefGet('probes:' + norm(reward)) || '[]') }
   catch { return [] }

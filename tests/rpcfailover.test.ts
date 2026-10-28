@@ -45,3 +45,33 @@ describe('RPC client failover', () => {
     void RpcError
   })
 })
+
+describe('REST fallback (Nimiq.Watch) in the RPC client', () => {
+  async function loadRest(urls: string[], proxy: boolean) {
+    vi.resetModules()
+    vi.doMock('../src/lib/net', () => ({ net: { network: 'mainnet', rpcUrl: urls[0], rpcUrls: urls }, isTestnet: false, NS: '' }))
+    vi.doMock('../src/services/backend', () => ({ backendUrl: proxy ? 'https://sb.example' : '', backendEnabled: proxy }))
+    return await import('../src/services/rpc')
+  }
+  it('JSON-RPC nodes down: the staker comes from the REST API', async () => {
+    const seen: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      seen.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.startsWith('https://v2.nimiqwatch.com')) return new Response(JSON.stringify({ address: 'NQ03', balance: 5, delegation: 'NQ32', inactiveBalance: 0, inactiveFrom: null, retiredBalance: 0 }), { status: 200 })
+      return new Response('down', { status: 503 })
+    }))
+    const { rpc } = await loadRest(['https://a.example'], false)
+    const r = await rpc<{ balance: number }>('getStakerByAddress', ['NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'], { noStore: true })
+    expect(r.value.balance).toBe(5)
+    expect(seen.at(-1)).toBe('GET https://v2.nimiqwatch.com/api/v2/staker/NQ03J45B27LTQHD72PRM73QPSB15LM6HVCR8')
+  })
+  it('a method REST can\'t answer goes on to the proxy, and REST stays healthy', async () => {
+    const seen: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { seen.push(url); if (url.includes('rpc-proxy')) return ok({ rewardAddress: 'NQ16' }); return new Response('down', { status: 503 }) }))
+    const { rpc, rpcPool } = await loadRest(['https://a.example'], true)
+    const r = await rpc<{ rewardAddress: string }>('getValidatorByAddress', ['NQ51'], { noStore: true })
+    expect(r.value.rewardAddress).toBe('NQ16')
+    expect(seen.some(u => u.includes('nimiqwatch.com/api'))).toBe(false)
+    expect(rpcPool.status().find(e => e.kind === 'rest')?.state).not.toBe('down')
+  })
+})

@@ -1,4 +1,5 @@
 import { EndpointPool, classifyFailure } from './endpoints.ts'
+import { restResult, restUrl } from './restAdapter.ts'
 /**
  * Pool payout timing, server side. The same method the app uses (src/services/chain.ts):
  * payouts land as many transactions within minutes, so times are grouped into batches
@@ -45,9 +46,9 @@ const norm = (a: string) => a.replace(/\s+/g, '').toUpperCase()
  * failed one is retried after 60 s); a JSON-RPC error is an answer and is thrown as before.
  * `retry429: false` (user-facing reads): a 429 fails over at once instead of sleeping.
  */
-export function createRpc(urls: string | string[], budget = 14, opts: { retry429?: boolean } = {}) {
+export function createRpc(urls: string | string[], budget = 14, opts: { retry429?: boolean, rest?: string | null } = {}) {
   const retry429 = opts.retry429 ?? true
-  const pool = new EndpointPool(Array.isArray(urls) ? urls : [urls])
+  const pool = new EndpointPool(Array.isArray(urls) ? urls : [urls], { rest: opts.rest ?? null })
   const buckets = new Map<string, { tokens: number, last: number }>()
   let units = 0, calls = 0
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -67,6 +68,20 @@ export function createRpc(urls: string | string[], budget = 14, opts: { retry429
     const cost = method === 'getTransactionsByAddress' && Number(params[1]) > 100 ? 5 : 1
     const failed: string[] = []
     for (const ep of pool.order()) {
+      if (ep.kind === 'rest') {
+        // REST fallback (Nimiq.Watch): only the methods it can answer; the rest go to the next one.
+        const url = restUrl(ep.url, method, params)
+        if (!url) continue
+        await take(ep.url, 1)
+        calls++; units++
+        let res: Response
+        try { res = await fetch(url, { signal: AbortSignal.timeout(8000) }) }
+        catch { pool.markDown(ep.url, 'network'); failed.push(`${ep.url}: network`); continue }
+        const reply = restResult(method, params, res.status, await res.json().catch(() => null))
+        if (!reply) { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${ep.url}: HTTP ${res.status}`); continue }
+        pool.markOk(ep.url, 0)
+        return reply as Awaited<ReturnType<typeof raw>>
+      }
       for (let attempt = 0; ; attempt++) {
         await take(ep.url, cost)
         calls++; units += cost
@@ -118,7 +133,7 @@ export async function fromScan(rpc: Rpc, reward: string, maxPages = 4, aliveMs =
   const out: Tx[] = []
   let startAt: string | null = null
   for (let page = 0; page < maxPages; page++) {
-    const list = await rpc.call<Tx[]>('getTransactionsByAddress', [reward, 500, startAt]) || []
+    const list: Tx[] = await rpc.call<Tx[]>('getTransactionsByAddress', [reward, 500, startAt]) || []
     out.push(...list.filter(t => norm(t.from) === norm(reward) && norm(t.to) !== norm(reward) && t.value > 0))
     if (batchTimes(out.map(t => t.timestamp)).length >= 2) break
     if (list.length < 500 || list[list.length - 1].timestamp < since) break

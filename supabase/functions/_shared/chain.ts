@@ -4,14 +4,14 @@
 import { createRpc } from './payouts.ts'
 import type { Rpc } from './payouts.ts'
 import type { ChainTx } from './verify.ts'
-import { serverRpcUrls } from './rpcEndpoints.ts'
+import { serverRest, serverRpcUrls } from './rpcEndpoints.ts'
 
 export type Net = 'mainnet' | 'testnet'
 
 /** One client per network per isolate: they share the per-IP budget. */
 const clients: Partial<Record<Net, Rpc>> = {}
 export function rpcFor(net: Net): Rpc {
-  return clients[net] ??= createRpc(serverRpcUrls(net), 12, { retry429: false })
+  return clients[net] ??= createRpc(serverRpcUrls(net), 12, { retry429: false, rest: serverRest(net) })
 }
 
 /** The node answered "there is no such thing" (as opposed to HTTP trouble or a timeout). */

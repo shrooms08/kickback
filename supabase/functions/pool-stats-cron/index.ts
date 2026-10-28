@@ -12,7 +12,7 @@ import { db } from '../_shared/db.ts'
 import { corsHeaders, json } from '../_shared/http.ts'
 import { createRpc, fromProbe, fromScan, nextPayoutAfter } from '../_shared/payouts.ts'
 import type { PayoutStats, Rpc } from '../_shared/payouts.ts'
-import { serverRpcUrls } from '../_shared/rpcEndpoints.ts'
+import { serverRest, serverRpcUrls } from '../_shared/rpcEndpoints.ts'
 
 const CONFIG = {
   mainnet: { rpc: 'https://rpc.nimiqwatch.com', api: 'https://validators-api-main.je-cf9.workers.dev' },
@@ -75,6 +75,26 @@ function timingCols(s: PayoutStats | null) {
   }
 }
 
+/**
+ * Reward addresses when getValidatorByAddress can't be read (RPC down, REST fallback has no
+ * validator route): a known probe staker of a pool delegates to its validator and is paid from its
+ * reward address, so staker(probe).delegation -> reward. Also the last stored values.
+ */
+async function fallbackRewards(rpc: Rpc): Promise<Map<string, { reward: string, active: boolean }>> {
+  const out = new Map<string, { reward: string, active: boolean }>()
+  const { data: prev } = await db.from('pool_stats').select('validator_address, reward_address, active').eq('network', 'mainnet').not('reward_address', 'is', null)
+  for (const r of prev ?? []) out.set(norm(r.validator_address), { reward: r.reward_address, active: !!r.active })
+  const { data: probes } = await db.from('pool_probes').select('reward_address, probe_address').eq('network', 'mainnet')
+  for (const p of probes ?? []) {
+    try {
+      const st = await rpc.call<{ delegation?: string, balance?: number } | null>('getStakerByAddress', [p.probe_address])
+      if (st?.delegation && !out.has(norm(st.delegation))) out.set(norm(st.delegation), { reward: p.reward_address, active: true })
+    }
+    catch { /* next probe */ }
+  }
+  return out
+}
+
 async function runMainnet(rpc: Rpc) {
   const [direct, known, status] = await Promise.all([
     api<ApiV[]>('mainnet', '/api/v1/validators?payout-type=direct&only-known=false'),
@@ -83,18 +103,22 @@ async function runMainnet(rpc: Rpc) {
   ])
   const elected = new Set<string>((status?.validators?.electedValidators ?? []).map((v: { address: string }) => norm(v.address)))
   const rows: Record<string, unknown>[] = []
+  let fallback: Map<string, { reward: string, active: boolean }> | null = null
   for (const v of direct.filter(v => v.payoutType === 'direct')) {
-    let chain: ChainV | null = null
+    let chain: ChainV | null = null, lookupFailed = false
     try { chain = await rpc.call<ChainV>('getValidatorByAddress', [v.address]) }
-    catch { /* stays inactive */ }
-    const active = !!chain && chain.inactivityFlag == null && !chain.retired && chain.jailedFrom == null
+    catch (e) { lookupFailed = !/not\s*found|no validator/i.test(String((e as Error).message)) }
+    // RPC trouble is not "inactive": keep the last known reward address (or one learned from a probe).
+    const known = !chain && lookupFailed ? (fallback ??= await fallbackRewards(rpc)).get(norm(v.address)) ?? null : null
+    const reward = chain?.rewardAddress ?? known?.reward ?? null
+    const active = chain ? chain.inactivityFlag == null && !chain.retired && chain.jailedFrom == null : !!known && elected.has(norm(v.address))
     const isElected = elected.has(norm(v.address))
     let s: PayoutStats | null = null
-    if (chain && active) {
-      try { s = await timing(rpc, 'mainnet', chain.rewardAddress, true) }
+    if (reward && active) {
+      try { s = await timing(rpc, 'mainnet', reward, true) }
       catch (e) { console.error('timing', v.name, (e as Error).message) }
     }
-    rows.push(row('mainnet', v, v.address, { reward_address: chain ? spaced(chain.rewardAddress) : null, active, elected: isElected, ...timingCols(s) }))
+    rows.push(row('mainnet', v, v.address, { reward_address: reward ? spaced(reward) : null, active, elected: isElected, ...timingCols(s) }))
   }
   const seen = new Set(rows.map(r => norm(String(r.validator_address))))
   for (const v of known.filter(v => !seen.has(norm(v.address)))) rows.push(row('mainnet', v, v.address, { elected: elected.has(norm(v.address)), active: elected.has(norm(v.address)) }))
@@ -128,7 +152,7 @@ Deno.serve(async (req) => {
   const net = new URL(req.url).searchParams.get('network') as Net
   if (net !== 'mainnet' && net !== 'testnet') return json({ error: 'network must be mainnet or testnet' }, 400, cors)
   const started = Date.now()
-  const rpc = createRpc(serverRpcUrls(net))
+  const rpc = createRpc(serverRpcUrls(net), 14, { rest: serverRest(net) })
   try {
     const rows = net === 'mainnet' ? await runMainnet(rpc) : await runTestnet(rpc)
     if (rows.length) {

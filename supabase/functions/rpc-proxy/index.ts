@@ -6,7 +6,7 @@
 import { corsHeaders, json, readJson } from '../_shared/http.ts'
 import { createRpc } from '../_shared/payouts.ts'
 import { RateLimiter, TtlCache, checkProxyRequest } from '../_shared/rpcProxy.ts'
-import { serverRpcUrls } from '../_shared/rpcEndpoints.ts'
+import { serverRest, serverRpcUrls } from '../_shared/rpcEndpoints.ts'
 import type { Net } from '../_shared/rpcEndpoints.ts'
 
 const limiter = new RateLimiter(120, 60_000)
@@ -15,7 +15,7 @@ const clients: Partial<Record<Net, ReturnType<typeof createRpc>>> = {}
 
 // The node's reply is passed on as it is: a result, or a JSON-RPC error such as "No staker".
 async function forward(net: Net, method: string, params: unknown[]): Promise<{ result?: unknown, error?: unknown }> {
-  const rpc = clients[net] ??= createRpc(serverRpcUrls(net), 14, { retry429: false })
+  const rpc = clients[net] ??= createRpc(serverRpcUrls(net), 14, { retry429: false, rest: serverRest(net) })
   const r = await rpc.raw(method, params)
   return r.error ? { error: r.error } : { result: r.result }
 }

@@ -14,6 +14,7 @@ import { cacheGet, cacheSet, ageMs } from '../lib/cache'
 import { net } from '../lib/net'
 import { backendUrl } from './backend'
 import { EndpointPool, classifyFailure } from '../lib/endpoints'
+import { REST_FALLBACK, restResult, restUrl } from '../lib/restAdapter'
 
 export const RPC_URL = net.rpcUrl
 const BUDGET = 16
@@ -56,7 +57,7 @@ export function resetRpcStats() {
 // An ordered list per network (src/lib/net.ts), then our Supabase rpc-proxy as the last resort.
 // One token bucket per endpoint: every public node has its own budget.
 const proxyUrl = backendUrl ? `${backendUrl}/functions/v1/rpc-proxy?network=${net.network}` : null
-export const rpcPool = new EndpointPool(net.rpcUrls ?? [net.rpcUrl], { proxy: proxyUrl })
+export const rpcPool = new EndpointPool(net.rpcUrls ?? [net.rpcUrl], { rest: REST_FALLBACK[net.network], proxy: proxyUrl })
 /** Bumped whenever an endpoint's state changes (Diagnostics re-renders). */
 export const rpcHealth = reactive({ tick: 0, active: '' as string, allDown: false })
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -103,7 +104,23 @@ function noteHealth() {
   rpcHealth.allDown = !rpcHealth.active
 }
 
-type Attempt<T> = { kind: 'answer', value: T } | { kind: 'rpcError', error: RpcError } | { kind: 'failover', reason: string }
+type Attempt<T> = { kind: 'answer', value: T } | { kind: 'rpcError', error: RpcError } | { kind: 'failover', reason: string } | { kind: 'skip' }
+
+/** The REST fallback: a GET for the methods it can answer ('skip' for the rest, not a failure). */
+async function attemptRest<T>(base: string, method: string, params: unknown[], timeoutMs: number): Promise<Attempt<T>> {
+  const url = restUrl(base, method, params)
+  if (!url) return { kind: 'skip' }
+  const t0 = performance.now()
+  let res: Response
+  try { res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) }) }
+  catch (error) { return { kind: 'failover', reason: (error as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs / 1000}s` : 'network error' } }
+  const body = await res.json().catch(() => null)
+  const r = restResult(method, params, res.status, body)
+  if (!r) return { kind: 'failover', reason: `HTTP ${res.status}` }
+  rpcPool.markOk(base, performance.now() - t0)
+  if (r.error) return { kind: 'rpcError', error: new RpcError(r.error.code, r.error.message, r.error.data, method) }
+  return { kind: 'answer', value: r.result!.data as T }
+}
 
 /** One request to one endpoint, classified: an answer, a JSON-RPC error (also an answer), or a failed endpoint. */
 async function attempt<T>(url: string, method: string, params: unknown[], timeoutMs: number): Promise<Attempt<T>> {
@@ -155,7 +172,8 @@ async function send<T>(method: string, params: unknown[]): Promise<T> {
     rpcStats.calls++
     rpcStats.units += cost
     rpcStats.byMethod[method] = (rpcStats.byMethod[method] || 0) + 1
-    const r = await attempt<T>(ep.url, method, params, TIMEOUT_MS)
+    const r = ep.kind === 'rest' ? await attemptRest<T>(ep.url, method, params, TIMEOUT_MS) : await attempt<T>(ep.url, method, params, TIMEOUT_MS)
+    if (r.kind === 'skip') continue
     if (r.kind === 'failover') {
       rpcPool.markDown(ep.url, r.reason)
       tried.push(`${new URL(ep.url).host}: ${r.reason}`)
@@ -181,7 +199,8 @@ async function send<T>(method: string, params: unknown[]): Promise<T> {
 /** Health check (getBlockNumber, 3 s) of every endpoint, in parallel: on start and from Diagnostics. */
 export async function checkEndpoints(): Promise<void> {
   await Promise.all(rpcPool.status().map(async (ep) => {
-    const r = await attempt<number>(ep.url, 'getBlockNumber', [], HEALTH_TIMEOUT_MS).catch(() => ({ kind: 'failover', reason: 'error' }) as const)
+    const check = ep.kind === 'rest' ? attemptRest<number>(ep.url, 'getBlockNumber', [], HEALTH_TIMEOUT_MS) : attempt<number>(ep.url, 'getBlockNumber', [], HEALTH_TIMEOUT_MS)
+    const r = await check.catch(() => ({ kind: 'failover', reason: 'error' }) as const)
     if (r.kind === 'failover') rpcPool.markDown(ep.url, r.reason)
   }))
   noteHealth()
