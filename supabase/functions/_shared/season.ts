@@ -99,22 +99,6 @@ export function milestonesFrom(f: Facts): MilestoneKey[] {
 export const SKINS = ['spark', 'kick', 'bounce', 'rally', 'surge', 'legend'] as const
 export type Skin = typeof SKINS[number]
 
-/** Stage A: milestones unlock the prototype's Stack skins. Spark is always unlocked. */
-export const SKIN_FOR: Partial<Record<MilestoneKey, Skin>> = {
-  first_stake: 'kick',
-  first_kickback: 'bounce',
-  first_share: 'rally',
-  ten_runs: 'surge',
-  hundred_shared: 'legend',
-  streak_30: 'legend',
-}
-
-export function skinsFrom(keys: readonly string[]): Skin[] {
-  const got = new Set<Skin>(['spark'])
-  for (const k of keys) { const s = SKIN_FOR[k as MilestoneKey]; if (s) got.add(s) }
-  return SKINS.filter(s => got.has(s))
-}
-
 /** No 0/O, 1/I: easy to read aloud and type. 32 characters, 5 bits each. */
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 

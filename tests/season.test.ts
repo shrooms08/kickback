@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SKIN_FOR, batchKickbacks, inviteCode, isInviteCode, milestonesFrom, skinsFrom, streak, weekKey } from '../supabase/functions/_shared/season'
+import { batchKickbacks, inviteCode, isInviteCode, milestonesFrom, streak, weekKey } from '../supabase/functions/_shared/season'
 import { STAKING_CONTRACT, checkTx } from '../supabase/functions/_shared/verify'
 
 const H = 3600e3
@@ -87,18 +87,6 @@ describe('milestones from verified facts only', () => {
     expect(milestonesFrom({ ...none, bestStreak: 59 })).toEqual([])
     expect(milestonesFrom({ ...none, bestStreak: 60 })).toEqual(['streak_30'])
     expect(milestonesFrom({ ...none, invitedStakers: 1 })).toEqual(['invited_staker'])
-  })
-})
-
-describe('skins from milestones', () => {
-  it('spark is always unlocked', () => {
-    expect(skinsFrom([])).toEqual(['spark'])
-  })
-  it('maps milestones to the prototype skins', () => {
-    expect(SKIN_FOR).toMatchObject({ first_stake: 'kick', first_kickback: 'bounce', first_share: 'rally', ten_runs: 'surge', hundred_shared: 'legend', streak_30: 'legend' })
-    expect(skinsFrom(['first_stake', 'ten_runs'])).toEqual(['spark', 'kick', 'surge'])
-    expect(skinsFrom(['hundred_shared', 'streak_30'])).toEqual(['spark', 'legend'])
-    expect(skinsFrom(['invited_staker'])).toEqual(['spark'])
   })
 })
 
