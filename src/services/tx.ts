@@ -9,6 +9,8 @@ import type { SendRequest } from './sendTypes'
 import { useDry } from '../stores/dry'
 
 export const CHECK_WINDOW_MS = 60_000
+/** After an uncertain error nothing is offered again for this long ("Still checking if it went through"). */
+export const UNCERTAIN_HOLD_MS = 10 * 60_000
 export const DRY_CHECK_WINDOW_MS = 10_000
 export const CONFIRM_POLL_MS = 4_000
 export const SLOW_AFTER_MS = 120_000
@@ -30,12 +32,16 @@ export async function send(req: SendRequest): Promise<SubmitResult> {
 // 08 SetActiveStake, 09 RetireStake. Seen on chain: AddStake = "06…".
 const TYPE_BYTE: Partial<Record<SendRequest['kind'], string>> = { newStaker: '05', addStake: '06', updateStaker: '07', setActive: '08', retire: '09' }
 
+const utf8Hex = (text: string) => Array.from(new TextEncoder().encode(text), b => b.toString(16).padStart(2, '0')).join('')
+
 /** Does this on-chain transaction look like the one we tried to send? */
 export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, me: string): boolean {
   if (tx.executionResult === false) return false
   switch (req.kind) {
     case 'payment':
+      // Same recipient, value and data. A source without the data field (REST) can't rule it out.
       return sameAddr(tx.from, me) && sameAddr(tx.to, req.recipient) && tx.value === req.value
+        && (tx.recipientData == null || tx.recipientData.toLowerCase() === (req.data ? utf8Hex(req.data) : ''))
     case 'remove':
       // Paid out of the staking contract to us; a fee could come out of the value.
       return sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, me) && tx.value <= req.value && tx.value >= req.value - 100_000
@@ -54,8 +60,8 @@ export const UNKNOWN = Symbol('unknown')
 
 /**
  * After a network or unknown error, look for the transaction on chain before
- * saying anything: newest 25 transactions of the address every 5 s, for up to
- * 60 s (10 s in dry run). Returns the hash if it went out, null if a JSON-RPC node
+ * saying anything: newest 25 transactions of the address every 5 s (20 s after the first
+ * minute), for up to 60 s by default (the ops store passes the rest of the 10-minute hold; 10 s in dry run). Returns the hash if it went out, null if a JSON-RPC node
  * answered and it isn't there, UNKNOWN if nothing (or only the REST indexer or the
  * proxy, which can lag) could be read: the caller keeps checking and never offers a re-send.
  */
@@ -63,7 +69,7 @@ export async function findOnChain(me: string, req: SendRequest, since: number, o
   const dry = useDry()
   const window = opts.windowMs ?? (dry.on ? DRY_CHECK_WINDOW_MS : CHECK_WINDOW_MS)
   let directReads = 0
-  const end = Date.now() + window
+  const start = Date.now(), end = start + window
   for (;;) {
     if (dry.on) {
       const h = dry.findSince(req, since)
@@ -81,8 +87,44 @@ export async function findOnChain(me: string, req: SendRequest, since: number, o
     const left = end - Date.now()
     onTick?.(Math.max(0, left))
     if (left <= 0) return dry.on || directReads > 0 ? null : UNKNOWN
-    await sleep(Math.min(5000, left))
+    // Every 5 s for the first minute, then every 20 s (the public node allows ~20 units / 10 s).
+    await sleep(Math.min(Date.now() - start < 60_000 ? 5000 : 20_000, left))
   }
+}
+
+/**
+ * Before anything is sent again after an uncertain error: look deeper than findOnChain. The
+ * address history page by page (at least 200 transactions and 2 hours back, at most 500) plus
+ * the mempool, for this exact request after `since`. `skipHashes` (already in the ledger) never
+ * count, so an earlier identical payment isn't taken for this one. Returns the hash, null when a
+ * JSON-RPC node answered both and it isn't there, UNKNOWN otherwise (then nothing is re-sent).
+ */
+export async function searchWide(me: string, req: SendRequest, since: number, skipHashes: ReadonlySet<string> = new Set()): Promise<string | null | typeof UNKNOWN> {
+  const dry = useDry()
+  if (dry.on) return dry.findSince(req, since)
+  const ok = (t: Tx & { recipientData?: string }) => !skipHashes.has(t.hash) && matches(t, req, me)
+  const deep = Math.min(since - 30_000, Date.now() - 2 * 3600e3)
+  let read = 0, startAt: string | null = null, historyDirect = true
+  try {
+    for (let page = 0; page < 5; page++) {
+      const r: { value: Tx[] } = await rpc<Tx[]>('getTransactionsByAddress', [me, 100, startAt], { noStore: true })
+      const list = r.value || []
+      if (rpcSource(r.value) !== 'direct') historyDirect = false
+      const hit = list.find(t => t.timestamp >= since - 30_000 && ok(t))
+      if (hit) return hit.hash
+      read += list.length
+      const oldest = list[list.length - 1]
+      if (list.length < 100 || !oldest || (read >= 200 && oldest.timestamp < deep)) break
+      startAt = oldest.hash
+    }
+  }
+  catch { return UNKNOWN }
+  let pending: Array<Tx & { recipientData?: string }>
+  try { pending = (await rpc<Array<Tx & { recipientData?: string }>>('mempoolContent', [true], { noStore: true })).value || [] }
+  catch { return UNKNOWN }
+  const hit = pending.find(t => typeof t === 'object' && ok({ ...t, executionResult: undefined }))
+  if (hit) return hit.hash
+  return historyDirect ? null : UNKNOWN
 }
 
 export type Inclusion = 'ok' | 'failed'

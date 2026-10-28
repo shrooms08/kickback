@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import Modal from '../components/Modal.vue'
 import TheStack from '../components/TheStack.vue'
 import HoldButton from '../components/HoldButton.vue'
@@ -10,9 +10,10 @@ import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
+import { useOps } from '../stores/ops'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
-import { now } from '../lib/time'
+import { checkingLine, now } from '../lib/time'
 import { ranksOf, splitCents } from '../lib/plan'
 import { splitLuna } from '../lib/money'
 import { shake } from '../lib/anim'
@@ -94,10 +95,15 @@ const ST: Record<RunStep['st'], [string, string]> = {
   failed: ['Didn\'t go through. Still in your wallet.', 'var(--kb-text-2)'],
   skipped: ['Not sent', 'var(--kb-text-3)'],
 }
+// "Still checking" counts up every second.
+const tick = ref(Date.now())
+const tickTimer = window.setInterval(() => { tick.value = Date.now() }, 1000)
+onBeforeUnmount(() => clearInterval(tickTimer))
+const ops = useOps()
 const steps = computed(() => flow.steps.map((x, i) => ({
   ...x,
   n: i + 1,
-  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : ST[x.st][0],
+  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : ST[x.st][0],
   color: ST[x.st][1],
   canRetry: running.value && x.st === 'cancelled',
 })))

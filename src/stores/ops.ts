@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { logMoney } from '../lib/moneylog'
 import { prefGet, prefSet } from '../lib/cache'
-import { UNKNOWN, findOnChain, send, waitIncluded } from '../services/tx'
+import { DRY_CHECK_WINDOW_MS, UNCERTAIN_HOLD_MS, UNKNOWN, findOnChain, searchWide, send, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
 import { usePlan } from './plan'
@@ -36,6 +36,8 @@ export interface Op {
   error?: string
   /** Seconds left in the chain check. */
   checkLeft?: number
+  /** When an uncertain error happened (it may have gone out): nothing is re-sent for 10 minutes after. */
+  uncertainAt?: number
   /**
    * Flow details. Switch: old pool, when it takes effect. Run: step index, `luna`, `type`
    * (send / restake) and `runId`, so the share is recorded when it settles, even after a restart.
@@ -50,6 +52,11 @@ export const TERMINAL: OpPhase[] = ['confirmed', 'failed', 'rejected', 'not-sent
  * (the run walking its steps, or a resume after a restart). The op id is the ledger id, so it is
  * written exactly once.
  */
+/** Hashes already shared: never mistaken for a new send of the same amount. */
+export function ledgerHashes(): Set<string> {
+  return new Set(usePlan().ledger.map(e => e.hash).filter((h): h is string => !!h))
+}
+
 function recordRunShare(op: Op) {
   const m = op.meta
   if (op.flow !== 'run' || op.phase !== 'confirmed' || !m || typeof m.luna !== 'number') return
@@ -116,12 +123,17 @@ export const useOps = defineStore('ops', {
       return this.byId(op.id)!
     },
 
-    /** Uncertain error: search the chain before saying anything. */
+    /**
+     * Uncertain error: search the chain before saying anything. It stays "checking" for 10 minutes
+     * (a transaction can show up late), then a deeper search (history and mempool) decides.
+     */
     async check(id: string, error?: string): Promise<void> {
       const op = this.byId(id)
       if (!op) return
-      this.patch(id, { phase: 'checking', error })
-      const hash = await findOnChain(op.address, op.req, op.startedAt, left => this.patch(id, { checkLeft: Math.ceil(left / 1000) }))
+      this.patch(id, { phase: 'checking', error, uncertainAt: op.uncertainAt ?? Date.now() })
+      const windowMs = op.dry ? DRY_CHECK_WINDOW_MS : Math.max(0, op.uncertainAt! + UNCERTAIN_HOLD_MS - Date.now())
+      let hash = await findOnChain(op.address, op.req, op.startedAt, left => this.patch(id, { checkLeft: Math.ceil(left / 1000) }), { windowMs })
+      if (hash === null && !op.dry) hash = await searchWide(op.address, op.req, op.startedAt, ledgerHashes())
       if (hash === UNKNOWN) {
         // The chain couldn't be read: it may have gone out. Stay "checking" (still in flight, no
         // re-send offered) and look again in 30 s, until a node can say for sure.
@@ -142,6 +154,21 @@ export const useOps = defineStore('ops', {
       if (!op?.hash) return
       const r = await waitIncluded(op.hash, { onSlow: () => this.patch(id, { slow: true }) })
       this.patch(id, { phase: r === 'ok' ? 'confirmed' : 'failed' })
+    },
+
+    /**
+     * Retry found an earlier send of this step (in a block or the mempool): follow it to the end
+     * instead of sending again. A pruned op comes back under its old id.
+     */
+    adopt(flow: OpFlow, req: SendRequest, address: string, hash: string, meta: Op['meta'], id?: string): string {
+      const old = id ? this.byId(id) : undefined
+      if (old) this.patch(old.id, { phase: 'confirming', hash, sentAt: old.sentAt ?? Date.now(), slow: false })
+      else this.ops.push({ id: id && isUuid(id) ? id : uuid(), flow, req, phase: 'confirming', address, dry: useDry().on, startedAt: Date.now(), hash, sentAt: Date.now(), meta })
+      const opId = old?.id ?? this.ops[this.ops.length - 1].id
+      this.save()
+      running.add(opId)
+      void this.confirm(opId).finally(() => running.delete(opId))
+      return opId
     },
 
     /** After a restart: continue checking anything that was in flight. Never re-sends. */

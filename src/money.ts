@@ -18,12 +18,13 @@ import { useWallet } from './stores/wallet'
 import { useFlow } from './stores/flow'
 import type { RunStep, StepState } from './stores/flow'
 import { useData } from './stores/data'
-import { useOps, TERMINAL } from './stores/ops'
+import { ledgerHashes, useOps, TERMINAL } from './stores/ops'
 import type { Op, OpFlow } from './stores/ops'
 import { currentStaker, useLive } from './stores/live'
 import { useDry } from './stores/dry'
 import { electionAfter, epochClock, releaseIfStoppedNow, sameAddr } from './services/chain'
 import type { SendRequest } from './services/sendTypes'
+import { UNCERTAIN_HOLD_MS, UNKNOWN, searchWide } from './services/tx'
 import { checkStake, maxStake, parseNimInput, runAmount, splitLuna, spendable } from './lib/money'
 import { nim2 } from './lib/format'
 import { span } from './lib/time'
@@ -460,8 +461,18 @@ async function retryLocked(release: () => void) {
   const wasDry = runWasDry()
   if (wasDry === undefined) return ui.showToast('This run can\'t be retried. Close it and run your plan again.')
   if (wasDry !== useWallet().isDry) return ui.showToast(wasDry ? 'That was a dry run. Turn dry run back on to retry it, or run your plan again.' : 'That was a real run. Turn dry run off to retry it.')
-  const todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled')
+  let todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled')
   if (!todo.length) return
+  // A step that may have gone out (uncertain error, or its op is gone) is looked for first.
+  const found = await recheckUnsure(todo)
+  if (found === 'blocked') return
+  todo = todo.filter(t => !found.has(t.i))
+  if (!todo.length) {
+    flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry })
+    persistRun()
+    syncRunSteps()
+    return
+  }
   const need = todo.reduce((a, { s }) => a + (s.type === 'keep' ? 0 : s.luna ?? 0), 0)
   const bal = await freshBalanceOrToast()
   if (bal == null) return
@@ -470,6 +481,39 @@ async function retryLocked(release: () => void) {
   persistRun()
   release()
   await processSteps(todo[0].i)
+}
+
+/**
+ * Before a retry re-sends anything: for each step whose last attempt may have gone out (an
+ * uncertain error, or an op pruned from storage), refuse within 10 minutes of the error, then
+ * search the chain deeply. Found: follow that transaction instead (the step confirms and is
+ * recorded once). Can't read the chain: nothing is re-sent. Returns the step indexes found.
+ */
+async function recheckUnsure(todo: Array<{ s: RunStep, i: number }>): Promise<Set<number> | 'blocked'> {
+  const ops = useOps(), ui = useUi()
+  const found = new Set<number>()
+  for (const { s, i } of todo) {
+    if (s.type === 'keep' || !s.opId) continue
+    const op = ops.byId(s.opId)
+    if (op && !(op.phase === 'not-sent' && op.uncertainAt != null)) continue
+    if (op?.uncertainAt && Date.now() - op.uncertainAt < UNCERTAIN_HOLD_MS && !op.dry) {
+      const min = Math.max(1, Math.ceil((op.uncertainAt + UNCERTAIN_HOLD_MS - Date.now()) / 60e3))
+      ui.showToast(`Still checking if it went through. You can retry in about ${min} min. Nothing was sent twice.`)
+      return 'blocked'
+    }
+    const req: SendRequest = op?.req ?? (s.type === 'send' ? { kind: 'payment', value: s.luna!, recipient: s.recipient!, data: 'Kickback' } : { kind: 'addStake', value: s.luna! })
+    // A pruned op is at least a day old: search as deep as we can.
+    const hash = await searchWide(me(), req, op?.startedAt ?? 0, ledgerHashes())
+    if (hash === UNKNOWN) {
+      ui.showToast('Can\'t check the network right now, so nothing was sent again. Try again in a minute.')
+      return 'blocked'
+    }
+    if (!hash) continue
+    const opId = ops.adopt('run', req, me(), hash, { step: i, luna: s.luna!, type: s.type, ...(s.runId ? { runId: s.runId } : {}) }, s.opId)
+    setStep(i, { opId, st: 'confirming' })
+    found.add(i)
+  }
+  return found
 }
 
 // ---------- withdraw (retire, then remove) ----------

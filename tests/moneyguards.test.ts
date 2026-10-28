@@ -119,7 +119,7 @@ describe('audit 3: a second hold while the first is still starting does nothing'
   function slowBalance(s: Awaited<ReturnType<typeof setup>>) {
     let release!: (v: number) => void
     vi.spyOn(s.wallet, 'freshBalance').mockImplementation(() => new Promise<number>((r) => { release = r }))
-    return () => release(100_000_000)
+    return async () => { while (!release) await flush(); release(100_000_000) }
   }
   it('run my plan', async () => {
     const s = await setup()
@@ -128,7 +128,7 @@ describe('audit 3: a second hold while the first is still starting does nothing'
     const go = slowBalance(s)
     const a = s.money.runPlanLive(), b = s.money.runPlanLive()
     expect(s.money.moneyLocked()).toBe(true)
-    go(); await Promise.all([a, b]); await flush()
+    await go(); await Promise.all([a, b]); await flush()
     expect(s.wallet.freshBalance).toHaveBeenCalledTimes(1)
     expect(tx.send).toHaveBeenCalledTimes(1)
     expect(s.money.moneyLocked()).toBe(false)
@@ -139,7 +139,7 @@ describe('audit 3: a second hold while the first is still starting does nothing'
     s.flow.$patch({ poolPick: 'p1' as never, amount: '200' })
     const go = slowBalance(s)
     const a = s.money.stakeLive(), b = s.money.stakeLive()
-    go(); await Promise.all([a, b]); await flush()
+    await go(); await Promise.all([a, b]); await flush()
     expect(s.wallet.freshBalance).toHaveBeenCalledTimes(1)
     expect(tx.send).toHaveBeenCalledTimes(1)
   })
@@ -148,7 +148,7 @@ describe('audit 3: a second hold while the first is still starting does nothing'
     s.flow.$patch(failedRun(false))
     const go = slowBalance(s)
     const a = s.money.retryRunLive(), b = s.money.retryRunLive()
-    go(); await Promise.all([a, b]); await flush()
+    await go(); await Promise.all([a, b]); await flush()
     expect(tx.send).toHaveBeenCalledTimes(1)
   })
   it('stop earning twice: one transaction', async () => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import Modal from '../components/Modal.vue'
 import Icon from '../components/Icon.vue'
 import { useFlow } from '../stores/flow'
@@ -10,6 +10,7 @@ import { useWallet } from '../stores/wallet'
 import { nim2 } from '../lib/format'
 import { cancelApprove } from '../flows'
 import { back } from '../router'
+import { checkingLine } from '../lib/time'
 
 // Waiting for the user to approve in Nimiq Pay, then (live) checking and
 // confirming on the network.
@@ -20,6 +21,10 @@ const ops = useOps()
 const wallet = useWallet()
 
 const op = computed(() => (wallet.isMock ? undefined : ops.byId(flow.approveOpId)))
+// Ticks every second so "Still checking" shows how long it has been.
+const tick = ref(Date.now())
+const timer = window.setInterval(() => { tick.value = Date.now() }, 1000)
+onBeforeUnmount(() => clearInterval(timer))
 const phase = computed(() => op.value?.phase ?? 'approving')
 
 const text = computed(() => {
@@ -37,7 +42,7 @@ const text = computed(() => {
 
 const view = computed(() => {
   const o = op.value
-  if (phase.value === 'checking') return { title: 'Checking', body: `Nimiq Pay lost the connection. Checking the network to see if it went through${o?.checkLeft ? ` (${o.checkLeft}s)` : ''}. Don't send it again.`, icon: 'retry' as const }
+  if (phase.value === 'checking') return { title: 'Checking', body: `Nimiq Pay lost the connection. ${checkingLine(o?.uncertainAt, tick.value)} It can take up to 10 minutes. You can leave this screen; nothing is sent again while it checks.`, icon: 'retry' as const }
   if (phase.value === 'confirming' && o?.slow) return { title: 'Still confirming', body: 'It\'s taking longer than usual. You can leave this screen. It updates when the network includes it.', icon: 'clock' as const }
   if (phase.value === 'confirming') return { title: 'Confirming', body: 'Sent. Waiting for the network to include it. Usually a few seconds.', icon: 'check' as const }
   return { title: 'Approve in Nimiq Pay', body: text.value, icon: 'phoneCheck' as const }
@@ -59,7 +64,7 @@ const view = computed(() => {
       </div>
     </div>
     <button v-if="wallet.isMock" class="kb-btn kb-btn-ghost" @click="cancelApprove">Cancel</button>
-    <button v-else-if="op?.slow" class="kb-btn kb-btn-ghost" @click="back(account.staked ? 'home' : 'homeEmpty')">Back to home</button>
+    <button v-else-if="op?.slow || phase === 'checking'" class="kb-btn kb-btn-ghost" @click="back(account.staked ? 'home' : 'homeEmpty')">Back to home</button>
   </Modal>
 </template>
 
