@@ -20,7 +20,7 @@ const wallet = useWallet()
 const data = useData()
 const bal = computed(() => account.walletNim)
 // Estimate: network staking reward after the best pool's fee. "about", never a promise.
-const rateLine = computed(() => rateText(data.bestApy))
+const rateLine = computed(() => rateText(data.bestRate))
 const ui = useUi()
 const monthly = computed(() => Math.round(bal.value * data.bestApy / 12))
 </script>

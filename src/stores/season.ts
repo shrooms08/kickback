@@ -66,6 +66,8 @@ const MOCK: SeasonData = {
 
 const key = (addr: string, what: string) => `season-${what}:${addr.replace(/\s+/g, '').toUpperCase()}`
 let wired = false
+/** Bumped on every wallet change: a load for an older wallet is dropped when it returns. */
+let generation = 0
 
 export function setSkinAttr(skin: Skin) {
   if (typeof document !== 'undefined') {
@@ -104,7 +106,10 @@ export const useSeason = defineStore('season', {
   actions: {
     /** Paint from cache for this wallet, then refresh from the server. */
     start(address: string) {
+      generation++
       this.address = address
+      this.loading = false
+      this.celebrate = null
       if (useWallet().isMock) { this.data = structuredClone(MOCK); this.useSkin(MOCK.skin); return }
       const cached = prefGet(key(address, 'data'))
       try { this.data = cached ? JSON.parse(cached) : null }
@@ -115,9 +120,17 @@ export const useSeason = defineStore('season', {
     async load() {
       const session = useSession()
       if (this.paused || !session.signedIn || !backendEnabled || this.loading) return
+      const gen = generation, address = this.address, token = session.token
       this.loading = true
       try {
-        const d = await callFn<SeasonData>('season', { method: 'GET', token: session.token, timeoutMs: 30_000 })
+        // A skin picked on this phone that the server hasn't got yet goes first.
+        const pending = prefGet(key(address, 'skin-pending')) ? (prefGet(key(address, 'skin')) as Skin | null) : null
+        if (pending) {
+          try { await callFn('season', { method: 'POST', token, body: { skin: pending } }); prefSet(key(address, 'skin-pending'), null) }
+          catch (e) { if (e instanceof BackendError && e.status === 400) prefSet(key(address, 'skin-pending'), null) }
+        }
+        const d = await callFn<SeasonData>('season', { method: 'GET', token, timeoutMs: 30_000 })
+        if (gen !== generation) return
         this.data = d
         this.error = ''
         this.lastLoadAt = Date.now()
@@ -125,13 +138,13 @@ export const useSeason = defineStore('season', {
         // The server's skin wins unless this phone picked one it hasn't sent yet.
         if (!prefGet(key(this.address, 'skin-pending'))) this.useSkin(d.unlocked.includes(d.skin) ? d.skin : 'spark')
         this.noticeUnlocks(d)
-        await this.claimRef()
       }
       catch (e) {
+        if (gen !== generation) return
         // 404 = the season function isn't deployed yet: no Season data, the app works as before.
         this.error = e instanceof BackendError ? (e.status === 404 ? 'Season is not live yet.' : e.message) : String(e)
       }
-      finally { this.loading = false }
+      finally { if (gen === generation) this.loading = false }
     },
     /** A skin unlocked that this phone hasn't celebrated yet. The first load only records. */
     noticeUnlocks(d: SeasonData) {
@@ -165,13 +178,15 @@ export const useSeason = defineStore('season', {
       const ref = prefGet('ref')
       const session = useSession()
       if (!ref || prefGet(key(this.address, 'ref-done')) || !session.signedIn) return
+      const address = this.address
       try {
         await callFn('season', { method: 'POST', token: session.token, body: { ref } })
-        prefSet(key(this.address, 'ref-done'), 'ok')
+        prefSet(key(address, 'ref-done'), 'ok')
       }
       catch (e) {
-        // Rejected for good (own code, already invited, unknown code): don't ask again.
-        if (e instanceof BackendError && e.status >= 400 && e.status < 500 && e.status !== 401) prefSet(key(this.address, 'ref-done'), String(e.status))
+        // Rejected for good (own code, already invited, unknown code: 400 / 409): don't ask again.
+        // 404 means the season function isn't live yet, 5xx/network: try again next time.
+        if (e instanceof BackendError && (e.status === 400 || e.status === 409)) prefSet(key(address, 'ref-done'), String(e.status))
       }
     },
   },
@@ -183,7 +198,8 @@ export function wireSeason() {
   wired = true
   const season = useSeason(), session = useSession(), flow = useFlow(), wallet = useWallet()
   watch(() => [wallet.connected, wallet.effectiveAddress] as const, ([on, a]) => { if (on && a) season.start(a) }, { immediate: true })
-  watch(() => session.signedIn, (s) => { if (s) void season.load() })
+  // After sign-in: claim the invite at once (before any stake), then read the season.
+  watch(() => session.signedIn, (s) => { if (s) void season.claimRef().finally(() => season.load()) }, { immediate: true })
   watch(() => flow.doneKey, () => {
     if (flow.runPhase !== 'done') return
     season.tick++

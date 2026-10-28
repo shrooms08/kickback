@@ -22,7 +22,8 @@ alter table public.events
 create unique index events_verified_hash on public.events (network, tx_hash) where verified;
 
 -- "Run when ready reaches": the plan's minimum, Luna (default 0.10 NIM).
-alter table public.plans add column min_ready_luna bigint not null default 10000 check (min_ready_luna > 0);
+-- Null = never set on the server (the phone's choice is kept on the first sync).
+alter table public.plans add column min_ready_luna bigint check (min_ready_luna is null or min_ready_luna > 0);
 
 -- The Stack skin the user applied (must be one of their unlocks; checked by the function).
 alter table public.users add column skin text not null default 'spark'

@@ -15,7 +15,7 @@ import { go } from '../router'
 const wallet = useWallet()
 const { copied, copy } = useCopy()
 const chip = computed(() => addressChip(wallet.effectiveAddress))
-const canSwitch = computed(() => wallet.basicAccounts.length > 1 && !wallet.isPreview)
+const canSwitch = computed(() => wallet.basicAccounts.length > 1)
 
 const ui = useUi()
 let taps: number[] = []

@@ -201,3 +201,9 @@ describe('audit fixes', () => {
     expect(countedRuns([MON, MON + 12 * H], [{ id: 'a', at: MON + 20 * H }])).toEqual(['a'])
   })
 })
+
+describe('RPC errors (review fixes)', () => {
+  it('"Method not found" is a broken call, not a missing tx', () => {
+    expect(isNotFound(new Error('getTransactionByHash: Method not found'))).toBe(false)
+  })
+})

@@ -91,7 +91,7 @@ function step(i: number, d: number) {
     <div class="mchips">
       <button v-for="c in MIN_READY_CHOICES" :key="c" class="mchip kb-press" :class="{ on: plan.minReadyLuna === c }" @click="plan.setMinReady(c)">{{ minLabel(c) }} NIM</button>
     </div>
-    <div class="mnote">Small kickbacks wait until this much is ready, so each run is worth its fee.</div>
+    <div class="mnote">Small kickbacks wait until this much is ready, so each run is worth its fee. A higher amount can make kickbacks wait more than 24h, which breaks your streak.</div>
   </div>
   <div class="live kb-num">{{ liveLine }}</div>
   <button v-if="plan.dirty" class="kb-btn kb-btn-primary" @click="savePlan">Save plan</button>

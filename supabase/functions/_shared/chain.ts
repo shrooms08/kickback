@@ -11,11 +11,11 @@ const RPC_URL: Record<Net, string> = { mainnet: 'https://rpc.nimiqwatch.com', te
 /** One client per network per isolate: they share the per-IP budget. */
 const clients: Partial<Record<Net, Rpc>> = {}
 export function rpcFor(net: Net): Rpc {
-  return clients[net] ??= createRpc(Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET' : 'RPC_TESTNET') || RPC_URL[net], 12)
+  return clients[net] ??= createRpc(Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET' : 'RPC_TESTNET') || RPC_URL[net], 12, { retry429: false })
 }
 
 /** The node answered "there is no such thing" (as opposed to HTTP trouble or a timeout). */
-export const isNotFound = (e: unknown) => /not\s*found|no\s+such|no staker with|no validator with|no account with|does not exist/i.test(String((e as Error)?.message ?? e))
+export const isNotFound = (e: unknown) => { const m = String((e as Error)?.message ?? e); return !/method not found/i.test(m) && /not\s*found|no\s+such|no staker with|no validator with|no account with|does not exist/i.test(m) }
 const notFound = isNotFound
 
 export async function getTx(rpc: Rpc, hash: string): Promise<ChainTx | null> {

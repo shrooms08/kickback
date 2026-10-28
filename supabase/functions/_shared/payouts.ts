@@ -41,7 +41,9 @@ const norm = (a: string) => a.replace(/\s+/g, '').toUpperCase()
  * JSON-RPC with the public node's budget: about 20 units per 10 s per IP; history reads with
  * max > 100 cost 5. This client spends at most `budget` units per 10 s and waits on 429.
  */
-export function createRpc(url: string, budget = 14) {
+/** `retry429: false` (user-facing reads): a 429 fails at once instead of sleeping and retrying. */
+export function createRpc(url: string, budget = 14, opts: { retry429?: boolean } = {}) {
+  const retry429 = opts.retry429 ?? true
   let tokens = budget, last = Date.now(), units = 0, calls = 0
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   async function take(cost: number) {
@@ -59,7 +61,7 @@ export function createRpc(url: string, budget = 14) {
       await take(cost)
       calls++; units += cost
       const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) })
-      if (res.status === 429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
+      if (res.status === 429 && retry429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
       if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
       const body = await res.json()
       if (body.error) throw new Error(rpcErrorText(method, body.error))

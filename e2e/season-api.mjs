@@ -2,7 +2,7 @@
 // Client claims never count: a share with a made-up tx hash stays unverified and unlocks nothing,
 // a skin that isn't unlocked can't be applied, your own invite code and a second inviter are
 // refused, and public stats only show verified, signed-in numbers.
-// Usage: node e2e/season-api.mjs [functionsBaseUrl]   (default: production)
+// Usage: node e2e/season-api.mjs [functionsBaseUrl]   (default: the local stack, supabase start + functions serve)
 import { randomBytes, randomUUID } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { blake2b } from '@noble/hashes/blake2.js'
@@ -10,7 +10,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { createNimiqVerifier, signedMessageData } from '../supabase/functions/_shared/nimiqSignature.ts'
 import { signInMessage } from '../supabase/functions/_shared/signin.ts'
 
-const FN = process.argv[2] || 'https://dhjcilstkumeglweddev.supabase.co/functions/v1'
+const FN = process.argv[2] || 'http://127.0.0.1:54321/functions/v1'
 const results = []
 const log = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`) }
 const hex = b => Buffer.from(b).toString('hex')

@@ -35,7 +35,7 @@ export async function verifyShare(rpc: Rpc, row: ShareRow): Promise<boolean> {
     .select('id')
   if (error) {
     // Another share already holds this tx (unique verified hash): this one never counts.
-    if (error.code === '23505') { await db.from('shares').update({ checked_at: now }).eq('id', row.id); return false }
+    if (error.code === '23505') { await db.from('shares').update({ checked_at: now, check_count: 10 }).eq('id', row.id); return false }
     throw error
   }
   if (!ok) await db.rpc('kickback_share_checked', { p_id: row.id })

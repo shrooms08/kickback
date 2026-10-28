@@ -79,7 +79,7 @@ async function scanChain(s: Session): Promise<boolean> {
 
 /** Invitees who claimed this wallet's code with no stake and have staked since. */
 async function creditInvites(s: Session): Promise<boolean> {
-  const open = must(await db.from('referrals').select('invitee').eq('network', s.network).eq('inviter', s.address).eq('had_stake_at_claim', false).is('credited_at', null).limit(5)) as Array<{ invitee: string }>
+  const open = must(await db.from('referrals').select('invitee').eq('network', s.network).eq('inviter', s.address).eq('had_stake_at_claim', false).is('credited_at', null).order('claimed_at', { ascending: false }).limit(10)) as Array<{ invitee: string }>
   try {
     for (const r of open) {
       if (hasStake(await getStaker(rpcFor(s.network), r.invitee))) must(await db.from('referrals').update({ credited_at: new Date().toISOString() }).eq('invitee', r.invitee).eq('network', s.network))
@@ -93,7 +93,7 @@ async function recheckShares(s: Session) {
   const cutoff = new Date(Date.now() - 2 * 60e3).toISOString()
   const rows = must(await db.from('shares').select('id, address, network, amount_luna, slice_type, tx_hash, status')
     .eq('address', s.address).eq('network', s.network).eq('verified', false).eq('status', 'confirmed').not('tx_hash', 'is', null)
-    .or(`checked_at.is.null,checked_at.lt.${cutoff}`).lt('check_count', 10).gt('created_at', new Date(Date.now() - 48 * 3600e3).toISOString()).limit(10)) as ShareRow[]
+    .or(`checked_at.is.null,checked_at.lt.${cutoff}`).lt('check_count', 10).order('checked_at', { ascending: true, nullsFirst: true }).gt('created_at', new Date(Date.now() - 48 * 3600e3).toISOString()).limit(10)) as ShareRow[]
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
@@ -124,7 +124,8 @@ async function getSeason(s: Session) {
   for (const sh of shares) { const k = sh.run_id ?? sh.id, t = Date.parse(sh.block_at); if (t >= since) runAt.set(k, Math.min(runAt.get(k) ?? Infinity, t)) }
   const counted = new Set(countedRuns(kickTimes, [...runAt].map(([id, at]) => ({ id, at }))))
   const inRuns = shares.filter(x => counted.has(x.run_id ?? x.id))
-  const st = streak(kickTimes, [...counted].map(id => runAt.get(id)!))
+  // Kickbacks from before the plan started don't count as missed.
+  const st = streak(kickTimes.filter(t => t >= since), [...counted].map(id => runAt.get(id)!))
   const kickLuna = kicks.reduce((a, k) => a + Number(k.luna), 0)
   const facts = {
     staked: !!scan?.staked,
@@ -173,7 +174,7 @@ async function post(s: Session, body: any) {
     const already = must(await db.from('referrals').select('inviter').eq('network', s.network).eq('invitee', s.address).maybeSingle())
     if (already) return { status: 409, body: { error: 'this wallet already has an inviter' } }
     const owner = must(await db.from('invite_codes').select('address').eq('network', s.network).eq('code', code).maybeSingle()) as { address: string } | null
-    if (!owner) return { status: 404, body: { error: 'no such invite code' } }
+    if (!owner) return { status: 400, body: { error: 'no such invite code' } }
     if (norm(owner.address) === norm(s.address)) return { status: 400, body: { error: 'that is your own invite code' } }
     // "Had a stake" = staked now, or ever sent a stake (an unstaked old staker doesn't count as new).
     let had: boolean

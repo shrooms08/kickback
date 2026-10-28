@@ -50,6 +50,21 @@ export const useData = defineStore('data', {
         return 0.08
       }
     },
+    /** The Nimiq staking calculator rate after the pool's fee, or null when it isn't known yet (no label then). */
+    rateFor() {
+      return (id: string | null | undefined): number | null => {
+        if (this.isMock) return this.apyFor(id)
+        const p = this.pool(id)
+        if (p.apyNet != null) return p.apyNet
+        return this.grossApy != null && p.feeRate != null ? this.grossApy * (1 - p.feeRate) : null
+      }
+    },
+    /** Best calculator rate across the pools on offer, or null. */
+    bestRate(): number | null {
+      if (this.isMock) return this.bestApy
+      const rates = this.livePools.map(p => p.apyNet).filter((r): r is number => r != null)
+      return rates.length ? Math.max(...rates) : null
+    },
     /** Best estimate across the pools on offer (Home before staking). */
     bestApy(): number {
       if (this.isMock) return 0.09

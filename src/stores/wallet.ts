@@ -161,16 +161,6 @@ export const useWallet = defineStore('wallet', {
       catch { /* recorded in diag */ }
       finally { diag.busy = false }
     },
-    /** Choose wallet: switch to another basic account (the caller reloads live data). */
-    switchTo(address: string): boolean {
-      if (!this.basicAccounts.includes(address) || address === this.address) return false
-      this.address = address
-      this.balanceSource = ''
-      this.balanceLuna = 0
-      prefSet('wallet-last', address)
-      if (this.env === 'nimiqpay') this.refreshWalletBalance()
-      return true
-    },
     async connect(): Promise<ConnectResult> {
       if (this.env === 'mock') {
         await new Promise(r => setTimeout(r, MOCK_CONNECT_MS))
@@ -183,12 +173,16 @@ export const useWallet = defineStore('wallet', {
       }
       try {
         const account = await connectAccount()
-        // Contract accounts (vesting, HTLC) are skipped: only basic accounts can stake and send.
-        const types: Record<string, string | null> = {}
-        await Promise.all(account.accounts.map(async (a) => { types[a] = await getAccountType(a) }))
-        const { basic, chosen } = pickBasic(account.accounts, types, prefGet('wallet-last'))
-        this.basicAccounts = basic
-        this.address = chosen
+        // Kickback acts as the account Nimiq Pay pays from (the first one). Other basic accounts
+        // are offered read only; contracts (vesting, HTLC) are skipped. Types are read in the
+        // background so a slow RPC never holds up Connect.
+        this.address = account.accounts[0]
+        this.basicAccounts = [account.accounts[0]]
+        if (account.accounts.length > 1) {
+          const types: Record<string, string | null> = {}
+          void Promise.all(account.accounts.slice(1).map(async (a) => { types[a] = await getAccountType(a) }))
+            .then(() => { if (this.address === account.accounts[0]) this.basicAccounts = pickBasic(account.accounts, types).basic })
+        }
         this.connected = true
         this.balanceSource = ''
         this.refreshWalletBalance()

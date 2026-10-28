@@ -10,7 +10,7 @@ import { rateText } from '../../lib/rateText'
 const data = useData(), a = useAccount(), flow = useFlow()
 const id = computed(() => (a.staked ? a.pool : flow.poolPick))
 const pool = computed(() => data.pool(id.value))
-const line = computed(() => rateText(data.apyFor(id.value)))
+const line = computed(() => rateText(data.rateFor(id.value)) || 'Rate not known yet')
 </script>
 
 <template>

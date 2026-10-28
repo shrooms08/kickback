@@ -75,7 +75,7 @@ const projection = computed(() => {
   return `About ${nim2(perKb)} NIM per kickback, about ${int0(Math.round(month))} NIM a month.`
 })
 
-const rateLine = computed(() => rateText(data.apyFor(flow.poolPick)))
+const rateLine = computed(() => rateText(data.rateFor(flow.poolPick)))
 const usdLine = computed(() => data.isMock ? usd(n.value, NIM_USD) : '')
 const maxText = computed(() => live.value ? String(Math.floor(maxStake(wallet.effectiveBalanceLuna) / 1000) / 100) : String(Math.floor(bal.value * 100) / 100))
 const chips = computed(() => [['100', '100'], ['500', '500'], ['1,000', '1000'], ['Max', maxText.value]] as const)
