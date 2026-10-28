@@ -19,7 +19,7 @@ import { logNav } from './lib/navlog'
 import { useSession } from './stores/session'
 
 import {
-  clearFinished, moneyBusy, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
+  clearFinished, moneyBusy, openWithdraw, previewBlocked, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
 } from './money'
 
 const isLive = () => !useWallet().isMock
@@ -442,6 +442,9 @@ export function keepInstead() {
   const account = useAccount(), ui = useUi()
   const prev = account.readyCents, pw = account.waiting
   if (isLive()) {
+    // Read only in preview; and never while a run is sharing the same amount.
+    if (previewBlocked()) return
+    if (moneyBusy()) return ui.showToast('Wait until your plan finishes.')
     // Keeping needs no transaction: mark what's ready as handled.
     const plan = usePlan(), luna = account.readyLuna
     return ui.closeSheet(() => {

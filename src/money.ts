@@ -22,7 +22,8 @@ import { ledgerHashes, useOps, TERMINAL } from './stores/ops'
 import type { Op, OpFlow } from './stores/ops'
 import { currentStaker, useLive } from './stores/live'
 import { useDry } from './stores/dry'
-import { electionAfter, epochClock, releaseIfStoppedNow, sameAddr } from './services/chain'
+import { electionAfter, epochClock, getStaker, releaseIfStoppedNow, sameAddr } from './services/chain'
+import type { Staker } from './services/chain'
 import type { SendRequest } from './services/sendTypes'
 import { UNCERTAIN_HOLD_MS, UNKNOWN, searchWide } from './services/tx'
 import { checkStake, maxStake, parseNimInput, runAmount, splitLuna, spendable } from './lib/money'
@@ -304,7 +305,10 @@ export function syncRunSteps() {
   const map = (list: RunStep[]) => list.map((s) => {
     if (!s.opId) return s
     const op = ops.byId(s.opId)
-    if (!op) return s
+    if (!op) {
+      if (s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming') { changed = true; return { ...s, st: 'unknown' as StepState } }
+      return s
+    }
     const st = PHASE_TO_STEP[op.phase]
     if (st !== s.st || !!op.slow !== !!s.slow) { changed = true; return { ...s, st, slow: !!op.slow } }
     return s
@@ -339,7 +343,13 @@ export function restoreRun() {
     flow.$patch({ runPhase: r.runPhase, doneMode: r.doneMode, steps: r.steps, runAmountLuna: r.runAmountLuna, wSteps: r.wSteps || [], wPhase: r.wPhase || 'review', runDry: r.runDry })
     syncRunSteps()
     // Steps that never started stay unsent: the run ends as partial with Retry.
-    const finish = (list: RunStep[]) => list.map(s => (s.st === 'pending' || s.st === 'waiting') && !(s.opId && ops.byId(s.opId) && !TERMINAL.includes(ops.byId(s.opId)!.phase)) ? { ...s, st: 'skipped' as StepState } : s)
+    // A step that never started is unsent. One whose op is gone (pruned from storage) may have
+    // gone out: it is "unknown", and Retry searches the chain for it first.
+    const finish = (list: RunStep[]) => list.map((s) => {
+      const op = s.opId ? ops.byId(s.opId) : undefined
+      if (s.opId && !op && s.st !== 'approved' && s.st !== 'cancelled') return { ...s, st: 'unknown' as StepState }
+      return (s.st === 'pending' || s.st === 'waiting') && !(op && !TERMINAL.includes(op.phase)) ? { ...s, st: 'skipped' as StepState } : s
+    })
     if (flow.runPhase === 'running' && !flow.steps.some(s => s.opId && !TERMINAL.includes(ops.byId(s.opId)?.phase ?? 'confirmed'))) {
       flow.$patch({ steps: finish(flow.steps) })
       finishRunLive()
@@ -437,7 +447,7 @@ function maybeFinish() {
 
 function finishRunLive() {
   const flow = useFlow()
-  const partial = flow.steps.some(s => s.st === 'failed' || s.st === 'skipped')
+  const partial = flow.steps.some(s => s.st === 'failed' || s.st === 'skipped' || s.st === 'unknown')
   flow.$patch({ runPhase: 'done', doneMode: partial ? 'partial' : 'full', doneKey: flow.doneKey + 1 })
   persistRun()
 }
@@ -462,7 +472,8 @@ async function retryLocked(release: () => void) {
   const wasDry = runWasDry()
   if (wasDry === undefined) return ui.showToast('This run can\'t be retried. Close it and run your plan again.')
   if (wasDry !== useWallet().isDry) return ui.showToast(wasDry ? 'That was a dry run. Turn dry run back on to retry it, or run your plan again.' : 'That was a real run. Turn dry run off to retry it.')
-  let todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled')
+  const again = (st: StepState) => st === 'failed' || st === 'skipped' || st === 'cancelled' || st === 'unknown'
+  let todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => again(s.st))
   if (!todo.length) return
   // A step that may have gone out (uncertain error, or its op is gone) is looked for first.
   const found = await recheckUnsure(todo)
@@ -478,7 +489,7 @@ async function retryLocked(release: () => void) {
   const bal = await freshBalanceOrToast()
   if (bal == null) return
   if (need > spendable(bal)) return ui.openSheet('fees')
-  flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry, steps: flow.steps.map(s => (s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled') ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
+  flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry, steps: flow.steps.map(s => again(s.st) ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
   persistRun()
   release()
   await processSteps(todo[0].i)
@@ -523,8 +534,7 @@ async function recheckUnsure(todo: Array<{ s: RunStep, i: number }>): Promise<Se
  * Withdraw released stake. Inactive stake must be retired first, and only the
  * whole retired balance can be removed (staker.rs retire_stake/remove_stake).
  */
-export function withdrawSteps(): RunStep[] {
-  const st = currentStaker()
+export function withdrawSteps(st: Staker | null = currentStaker()): RunStep[] {
   if (!st) return []
   const steps: RunStep[] = []
   if (st.inactiveBalance > 0) steps.push({ type: 'retire', luna: st.inactiveBalance, amt: st.inactiveBalance / 1e5, label: `Unlock ${NIM(st.inactiveBalance)} NIM`, st: 'pending' })
@@ -543,13 +553,34 @@ export function openWithdraw() {
   go('withdraw')
 }
 
-export async function runWithdraw() {
-  const flow = useFlow()
+export function runWithdraw() {
   if (previewBlocked()) return
+  return withLock('withdraw', withdrawLocked)
+}
+
+/** The staker as the chain has it now (dry run: the fake chain). Null when it can't be read fresh. */
+async function freshStaker(): Promise<Staker | null | 'unread'> {
+  if (useWallet().isDry) return useDry().chain.staker
+  try {
+    const r = await getStaker(me(), 0)
+    return r.stale ? 'unread' : r.value
+  }
+  catch { return 'unread' }
+}
+
+async function withdrawLocked(release: () => void) {
+  const flow = useFlow(), ui = useUi()
   if (flow.wPhase === 'running') return
-  flow.wPhase = 'running'
+  if (useOps().active.some(o => o.flow === 'withdraw')) return ui.showToast('Your withdrawal is still confirming. Nothing else to do.')
+  // Steps from the review screen can be old (a retire may have gone through): rebuild them now.
+  const st = await freshStaker()
+  if (st === 'unread') return ui.showToast('Couldn\'t read your stake. Nothing was sent. Try again in a moment.')
+  const steps = withdrawSteps(st)
+  if (!steps.length) { flow.$patch({ wSteps: [], wPhase: 'review' }); persistRun(); return ui.showToast('Nothing to withdraw right now.') }
+  flow.$patch({ wSteps: steps, wPhase: 'running' })
   withdrawing = true
   persistRun()
+  release()
   try { await walkWithdraw() }
   finally { withdrawing = false }
 }

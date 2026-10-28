@@ -201,10 +201,17 @@ export async function submit(req: SendRequest): Promise<SubmitResult> {
   }
 }
 
+/**
+ * How hosts say the user declined or closed the approval. The SDK maps EIP-1193 code 4001 to
+ * PERMISSION_DENIED; the others are names hosts and wallets use for the same thing.
+ * TRANSACTION_OUTCOME_UNKNOWN is not a cancel: it may have gone out.
+ */
+const CANCEL_TYPES = new Set(['PERMISSION_DENIED', 'USER_REJECTED', 'USER_CANCELLED', 'USER_CANCELED', 'CANCELLED', 'CANCELED', 'REJECTED', 'ACTION_REJECTED'])
+
 /** Map a wallet error to what we can honestly say about it. */
 export function classify(error: unknown): SubmitResult {
   if (NimiqProviderError.is(error)) {
-    if (error.type === 'PERMISSION_DENIED' || error.code === 4001) return { status: 'rejected' }
+    if (CANCEL_TYPES.has(error.type) || error.code === 4001) return { status: 'rejected' }
     if (isHostNotReady(error)) return { status: 'not-sent', error: describe(error) }
     if (error.type === 'INVALID_TRANSACTION' || error.type === 'UNKNOWN_REQUEST') return { status: 'not-sent', error: describe(error) }
   }

@@ -4,7 +4,8 @@ import type { ScreenName } from './nav'
 
 export type ApproveKind = 'stake' | 'switch' | 'unstake' | 'keep'
 export type ErrorFrom = 'stake' | 'switch' | 'unstake' | 'network' | 'notSent' | 'chainFailed'
-export type StepState = 'pending' | 'waiting' | 'checking' | 'confirming' | 'approved' | 'cancelled' | 'failed' | 'skipped'
+/** `unknown`: its op is gone (pruned), so it may have gone out; Retry checks the chain before sending. */
+export type StepState = 'pending' | 'waiting' | 'checking' | 'confirming' | 'approved' | 'cancelled' | 'failed' | 'skipped' | 'unknown'
 export type StepType = 'send' | 'restake' | 'keep' | 'retire' | 'remove'
 
 export interface RunStep {
