@@ -14,7 +14,7 @@ for (const [w, h] of [[390, 844], [360, 740]]) {
   const page = await ctx.newPage()
   page.on('pageerror', e => errors.push(`${w}: ${e.message}`))
   const pinia = fn => page.evaluate(`(${fn})(document.querySelector('#app').__vue_app__.config.globalProperties.$pinia)`)
-  const shot = async (name) => { await sleep(700); await page.screenshot({ path: `${OUT}/${w}-${name}.png` }) }
+  const shot = async (name) => { await sleep(700); if (OUT) await page.screenshot({ path: `${OUT}/${w}-${name}.png` }) }
   const barVisible = async (name, sel = '[data-kb="action-bar"]') => {
     const box = await page.locator(sel).filter({ visible: true }).last().boundingBox().catch(() => null)
     const ok = !!box && box.y + box.height <= h + 1 && box.y >= 0
@@ -54,5 +54,8 @@ for (const [w, h] of [[390, 844], [360, 740]]) {
   await ctx.close()
 }
 await browser.close()
-console.log(errors.length ? 'PAGE ERRORS\n' + errors.join('\n') : 'no page errors')
-console.log(fails.length ? 'FAILS\n' + fails.join('\n') : 'all layout checks passed')
+for (const e of errors) console.log('FAIL  page error', e)
+for (const f of fails) console.log('FAIL ', f)
+const bad = errors.length + fails.length
+console.log(bad ? `\n${bad} failed` : '\nPASS  all season UI and layout checks (390x844 and 360x740)')
+process.exit(bad ? 1 : 0)
