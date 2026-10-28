@@ -4,14 +4,14 @@
 import { createRpc } from './payouts.ts'
 import type { Rpc } from './payouts.ts'
 import type { ChainTx } from './verify.ts'
+import { serverRpcUrls } from './rpcEndpoints.ts'
 
 export type Net = 'mainnet' | 'testnet'
-const RPC_URL: Record<Net, string> = { mainnet: 'https://rpc.nimiqwatch.com', testnet: 'https://rpc.testnet.nimiqwatch.com' }
 
 /** One client per network per isolate: they share the per-IP budget. */
 const clients: Partial<Record<Net, Rpc>> = {}
 export function rpcFor(net: Net): Rpc {
-  return clients[net] ??= createRpc(Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET' : 'RPC_TESTNET') || RPC_URL[net], 12, { retry429: false })
+  return clients[net] ??= createRpc(serverRpcUrls(net), 12, { retry429: false })
 }
 
 /** The node answered "there is no such thing" (as opposed to HTTP trouble or a timeout). */

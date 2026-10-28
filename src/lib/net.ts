@@ -10,6 +10,8 @@ export type Network = 'mainnet' | 'testnet'
 export interface NetConfig {
   network: Network
   rpcUrl: string
+  /** Ordered RPC endpoints (failover in this order; the first is rpcUrl). */
+  rpcUrls: string[]
   validatorsApiUrl: string
   /** Explorer page for a transaction hash. */
   explorerTxUrl: (hash: string) => string
@@ -22,6 +24,7 @@ export interface NetConfig {
 const CONFIGS: Record<Network, Omit<NetConfig, 'network'>> = {
   mainnet: {
     rpcUrl: 'https://rpc.nimiqwatch.com',
+    rpcUrls: ['https://rpc.nimiqwatch.com'],
     validatorsApiUrl: 'https://validators-api-main.je-cf9.workers.dev',
     explorerTxUrl: hash => `https://nimiq.watch/#${hash}`,
     genesisBlock: 3_456_000,
@@ -29,6 +32,7 @@ const CONFIGS: Record<Network, Omit<NetConfig, 'network'>> = {
   },
   testnet: {
     rpcUrl: 'https://rpc.testnet.nimiqwatch.com',
+    rpcUrls: ['https://rpc.testnet.nimiqwatch.com'],
     validatorsApiUrl: 'https://validators-api-test.je-cf9.workers.dev',
     explorerTxUrl: hash => `https://test.nimiq.watch/#${hash}`,
     genesisBlock: 3_032_010,

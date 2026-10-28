@@ -9,7 +9,7 @@ import { useOps, onSettled } from './ops'
 import { useDry } from './dry'
 import { router } from '../router'
 import type { Pool } from '../services/mock'
-import { rpc } from '../services/rpc'
+import { checkEndpoints, rpc } from '../services/rpc'
 import {
   STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, firstKickbackAt, getAccountBalance, getActiveValidators, getStaker, getValidator,
   learnProbe, norm, payoutClock, poolStats, sameAddr, spaced, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
@@ -27,6 +27,7 @@ import { ago, clockOrDay, duration, hhmm, now, startClock } from '../lib/time'
 const H = 3600e3
 const STALE_AFTER = 10 * 60e3
 const REFRESH_EVERY = 2 * 60e3
+const DEGRADED_EVERY = 30e3
 
 /** Everything needed to draw the app for one address. Cached per address for instant paint. */
 interface Snapshot {
@@ -62,6 +63,7 @@ let timer = 0
 let generation = 0
 let scanning = false
 let clockLoading = false
+let healthChecked = false
 
 const feePct = (f: number) => `${+(f * 100).toFixed(2)}%`
 
@@ -214,6 +216,8 @@ export const useLive = defineStore('live', {
       if (wallet.isMock) return 'ok'
       startClock()
       pruneCache()
+      // Health check of every RPC endpoint (getBlockNumber, 3 s), once per session, in the background.
+      if (!healthChecked) { healthChecked = true; void checkEndpoints() }
       const address = wallet.effectiveAddress
       generation++
       this.address = address
@@ -223,7 +227,13 @@ export const useLive = defineStore('live', {
       ops.load(address)
       ops.resume()
       clearInterval(timer)
-      timer = window.setInterval(() => { if (document.visibilityState === 'visible') this.refresh() }, REFRESH_EVERY)
+      // Every 2 min; every 30 s while network data is delayed (degraded mode).
+      let lastTry = Date.now()
+      timer = window.setInterval(() => {
+        if (document.visibilityState !== 'visible') return
+        const every = useAccount().stale || useAccount().chainUnknown ? DEGRADED_EVERY : REFRESH_EVERY
+        if (Date.now() - lastTry >= every) { lastTry = Date.now(); this.refresh() }
+      }, DEGRADED_EVERY)
       const cached = cacheGet<Snapshot>('snap:' + norm(address))
       if (cached && cached.v.rewards) {
         this.apply(cached.v, 'keep')
@@ -324,7 +334,7 @@ export const useLive = defineStore('live', {
       }
       catch (error) {
         this.lastError = (error as Error).message || String(error)
-        if (snap) this.markStale()
+        if (snap) this.markStale(true)
         return !!snap
       }
       finally {
@@ -508,8 +518,8 @@ export const useLive = defineStore('live', {
       if (s.pools.length) data.poolsState = 'ready'
       if (wallet.isPreview && s.balanceLuna != null) wallet.previewBalanceLuna = s.balanceLuna
       this.derive()
-      if (result === 'failed') this.markStale()
-      else if (result === 'ok') account.$patch({ stale: false, staleMin: 0 })
+      if (result === 'failed') this.markStale(true)
+      else if (result === 'ok') account.$patch({ stale: false, staleMin: 0, chainUnknown: false })
       this.routeHome()
     },
 
@@ -641,11 +651,12 @@ export const useLive = defineStore('live', {
       })
     },
 
-    markStale() {
+    /** The data on screen is old: after a failed refresh at once (degraded mode), otherwise after 10 min. */
+    markStale(failed = false) {
       const account = useAccount()
       if (!snap) return
       const age = Date.now() - snap.at
-      account.$patch({ stale: age > STALE_AFTER, staleMin: Math.round(age / 60e3) })
+      account.$patch({ stale: failed || age > STALE_AFTER, staleMin: Math.round(age / 60e3) })
     },
 
     /** Keep Home and Home (not staked) in line with the stake. */

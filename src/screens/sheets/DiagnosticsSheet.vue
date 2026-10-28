@@ -9,7 +9,7 @@ import { useCopy } from '../../lib/copy'
 import { useLive } from '../../stores/live'
 import { useData } from '../../stores/data'
 import { useAccount } from '../../stores/account'
-import { rpcStats } from '../../services/rpc'
+import { rpcHealth, rpcPool, rpcStats } from '../../services/rpc'
 import { formatAddress, isNimiqAddress } from '../../lib/format'
 import { ago } from '../../lib/time'
 import { shake } from '../../lib/anim'
@@ -139,7 +139,8 @@ const lines = computed(() => {
     ['window.nimiq', `at boot: ${diag.nimiqAtBoot ? 'yes' : 'no'} · now: ${window.nimiq ? 'yes' : 'no'}`],
     ['Host network / language', `${host.network || 'n/a'} / ${host.language || 'n/a'}`],
     ['Network', `${net.network} · from ${net.source} · network id ${net.networkId} · genesis block ${net.genesisBlock}`],
-    ['RPC URL', net.rpcUrl],
+    ['RPC active', rpcHealth.active ? rpcHealth.active.replace('https://', '') : 'none: every endpoint is waiting to be retried (degraded mode)'],
+    ['RPC endpoints', (void rpcHealth.tick, rpcPool.status().map(e => `${e.kind === 'proxy' ? 'proxy' : e.url.replace('https://', '')}: ${e.state}${e.latencyMs != null ? ` ${e.latencyMs} ms` : ''}${e.lastError ? ` (${e.lastError})` : ''}`).join(' · '))],
     ['Validators API URL', net.validatorsApiUrl],
     ['Explorer', net.explorerTxUrl('<hash>')],
     ['Backend', backendEnabled ? backendUrl.replace('https://', '') : 'not configured (local only)'],

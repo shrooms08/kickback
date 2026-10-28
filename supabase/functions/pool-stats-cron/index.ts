@@ -12,6 +12,7 @@ import { db } from '../_shared/db.ts'
 import { corsHeaders, json } from '../_shared/http.ts'
 import { createRpc, fromProbe, fromScan, nextPayoutAfter } from '../_shared/payouts.ts'
 import type { PayoutStats, Rpc } from '../_shared/payouts.ts'
+import { serverRpcUrls } from '../_shared/rpcEndpoints.ts'
 
 const CONFIG = {
   mainnet: { rpc: 'https://rpc.nimiqwatch.com', api: 'https://validators-api-main.je-cf9.workers.dev' },
@@ -127,7 +128,7 @@ Deno.serve(async (req) => {
   const net = new URL(req.url).searchParams.get('network') as Net
   if (net !== 'mainnet' && net !== 'testnet') return json({ error: 'network must be mainnet or testnet' }, 400, cors)
   const started = Date.now()
-  const rpc = createRpc(CONFIG[net].rpc)
+  const rpc = createRpc(serverRpcUrls(net))
   try {
     const rows = net === 'mainnet' ? await runMainnet(rpc) : await runTestnet(rpc)
     if (rows.length) {

@@ -47,6 +47,7 @@ const reason = computed(() => {
   if (wallet.isPreview) return 'Preview is read only'
   if (live.value) {
     if (account.offline) return 'You\'re offline. Reconnect to stake.'
+    if (account.chainUnknown) return 'Can\'t check your stake right now. Try again in a minute.'
     if (mode.value === 'other') return `You're staking with ${account.poolName}. Switch pool to move your stake.`
     if (!wallet.balanceKnown) return 'Reading your balance…'
     const max = nim2(maxStake(wallet.effectiveBalanceLuna) / 1e5)

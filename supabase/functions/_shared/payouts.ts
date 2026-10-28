@@ -1,3 +1,4 @@
+import { EndpointPool, classifyFailure } from './endpoints.ts'
 /**
  * Pool payout timing, server side. The same method the app uses (src/services/chain.ts):
  * payouts land as many transactions within minutes, so times are grouped into batches
@@ -38,37 +39,55 @@ export interface Tx { hash: string, timestamp: number, from: string, to: string,
 const norm = (a: string) => a.replace(/\s+/g, '').toUpperCase()
 
 /**
- * JSON-RPC with the public node's budget: about 20 units per 10 s per IP; history reads with
- * max > 100 cost 5. This client spends at most `budget` units per 10 s and waits on 429.
+ * JSON-RPC with the public nodes' budget: about 20 units per 10 s per IP; history reads with
+ * max > 100 cost 5. This client spends at most `budget` units per 10 s per endpoint. With several
+ * URLs it fails over in order on network errors, timeouts, 5xx, 429 and non-JSON replies (the
+ * failed one is retried after 60 s); a JSON-RPC error is an answer and is thrown as before.
+ * `retry429: false` (user-facing reads): a 429 fails over at once instead of sleeping.
  */
-/** `retry429: false` (user-facing reads): a 429 fails at once instead of sleeping and retrying. */
-export function createRpc(url: string, budget = 14, opts: { retry429?: boolean } = {}) {
+export function createRpc(urls: string | string[], budget = 14, opts: { retry429?: boolean } = {}) {
   const retry429 = opts.retry429 ?? true
-  let tokens = budget, last = Date.now(), units = 0, calls = 0
+  const pool = new EndpointPool(Array.isArray(urls) ? urls : [urls])
+  const buckets = new Map<string, { tokens: number, last: number }>()
+  let units = 0, calls = 0
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-  async function take(cost: number) {
+  async function take(url: string, cost: number) {
+    const b = buckets.get(url) ?? { tokens: budget, last: Date.now() }
+    buckets.set(url, b)
     for (;;) {
       const now = Date.now()
-      tokens = Math.min(budget, tokens + (now - last) * budget / 10_000)
-      last = now
-      if (tokens >= cost) { tokens -= cost; return }
-      await sleep(Math.ceil((cost - tokens) * 10_000 / budget))
+      b.tokens = Math.min(budget, b.tokens + (now - b.last) * budget / 10_000)
+      b.last = now
+      if (b.tokens >= cost) { b.tokens -= cost; return }
+      await sleep(Math.ceil((cost - b.tokens) * 10_000 / budget))
     }
+  }
+  /** The node's reply as it is ({ result } or { error }), from the first endpoint that answers. */
+  async function raw(method: string, params: unknown[]): Promise<{ result?: { data: unknown, metadata?: unknown }, error?: { code: number, message: string, data?: unknown } }> {
+    const cost = method === 'getTransactionsByAddress' && Number(params[1]) > 100 ? 5 : 1
+    const failed: string[] = []
+    for (const ep of pool.order()) {
+      for (let attempt = 0; ; attempt++) {
+        await take(ep.url, cost)
+        calls++; units += cost
+        let res: Response
+        try { res = await fetch(ep.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) }) }
+        catch (e) { pool.markDown(ep.url, (e as Error).name === 'TimeoutError' ? 'timeout' : 'network'); failed.push(`${ep.url}: network`); break }
+        if (res.status === 429 && retry429 && attempt < 2) { buckets.get(ep.url)!.tokens = 0; await sleep(5000); continue }
+        const body = await res.json().catch(() => null)
+        if (classifyFailure({ status: res.status, json: !!body && (body.result !== undefined || body.error !== undefined) }) === 'failover') { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${ep.url}: HTTP ${res.status}`); break }
+        pool.markOk(ep.url, 0)
+        return body
+      }
+    }
+    throw new Error(`${method}: every RPC endpoint failed${failed.length ? ` (${failed.join('; ')})` : ''}`)
   }
   async function call<T>(method: string, params: unknown[]): Promise<T> {
-    const cost = method === 'getTransactionsByAddress' && Number(params[1]) > 100 ? 5 : 1
-    for (let attempt = 0; ; attempt++) {
-      await take(cost)
-      calls++; units += cost
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) })
-      if (res.status === 429 && retry429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
-      if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
-      const body = await res.json()
-      if (body.error) throw new Error(rpcErrorText(method, body.error))
-      return body.result?.data as T
-    }
+    const body = await raw(method, params)
+    if (body.error) throw new Error(rpcErrorText(method, body.error))
+    return body.result?.data as T
   }
-  return { call, stats: () => ({ calls, units }) }
+  return { call, raw, stats: () => ({ calls, units }), status: () => pool.status() }
 }
 
 export type Rpc = ReturnType<typeof createRpc>

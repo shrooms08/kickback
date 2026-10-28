@@ -42,6 +42,8 @@ export const useAccount = defineStore('account', {
     notDirect: false,
     /** Age of the data shown when the last refresh failed, minutes. */
     staleMin: 0,
+    /** Degraded: the chain couldn't be read at all yet (no cache); staking waits until it can. */
+    chainUnknown: false,
     /** Latest payout of the user's pool (to anyone), ms. */
     poolLastPaidAt: null as number | null,
     /** Hours until the first kickback, for stakers with none yet. */
