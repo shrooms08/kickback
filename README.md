@@ -19,10 +19,11 @@ with your plan: send part to someone you care about, restake part, keep the rest
    keep needs none.
 4. **Stop any time.** Stop earning (deactivate), undo while it's still inactive, withdraw after the lock, or switch pool.
 
-**Season 1** (cosmetic only, ends Nov 30): a kickback streak (shared within 24h of landing, one streak saver per week),
-milestones (first stake, first kickback, first share, 10 runs, 100 NIM shared, 30-day streak, a friend who staked), Stack
-skins unlocked by milestones, a share card (PNG, NIM only) and invite codes. Milestones and skins are not money and never
-become tokens.
+**Season 1** (cosmetic only, ends Nov 30): XP earned on the server from your stake (up to 2,000 a day), plan runs, sends,
+friends who stake and three weekly quests; six tiers (Spark, Kick, Bounce, Rally, Surge, Legend, three sub-levels each),
+each unlocking a Stack skin; a kickback streak (shared within 24h of landing, one streak saver per week); milestones
+(first stake, first kickback, first share, 10 runs, 100 NIM shared, 30-day streak, a friend who staked); a share card
+(PNG, NIM only) and invite codes. XP, milestones and skins are not money and never become tokens.
 
 Other details: the reward rate is the **Nimiq staking calculator** rate (nimiq.com/staking, ported exactly in
 `src/lib/rate.ts`) minus the pool fee; calendar reminders (.ics) for the next kickback or every kickback for two weeks;
@@ -60,7 +61,7 @@ nimiq.com's `/api/staking-info`. `@nimiq/utils` for address checksums.
 - **Chain reads:** the app reads stake, payouts and history straight from Nimiq RPC, cached per address for instant paint.
 - **Backend (optional):** Supabase. Postgres with RLS on every table, Edge Functions on Deno:
   `auth-nonce` / `auth-verify` (wallet-signed sign-in, 30-day session), `sync` (plan, contacts, shares, events),
-  `season` (streak, milestones, skins, invites), `pool-stats-cron` (pg_cron every 15 min per network: pool payout timing
+  `season` (XP, tiers, quests, streak, milestones, skins, invites), `xp-cron` (daily stake XP at 00:10 UTC), `pool-stats-cron` (pg_cron every 15 min per network: pool payout timing
   from the Validators API + RPC), `stats` (public totals). Without the backend the app runs local-only. See
   `docs/backend.md`.
 - **Testnet:** the same app on Nimiq testnet when Nimiq Pay reports it (`docs/testnet.md`): separate RPC, Validators API,
