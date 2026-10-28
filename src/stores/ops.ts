@@ -5,6 +5,10 @@ import { DRY_CHECK_WINDOW_MS, UNCERTAIN_HOLD_MS, UNKNOWN, findOnChain, searchWid
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
 import { usePlan } from './plan'
+import { useUi } from './ui'
+import { isValidAddress } from '../lib/address'
+import { STAKING_CONTRACT, sameAddr } from '../services/chain'
+import type { Tx } from '../services/chain'
 import { isUuid, uuid } from '../lib/uuid'
 
 // Every money action is an "op", persisted per address. If the app is closed
@@ -52,6 +56,19 @@ export const TERMINAL: OpPhase[] = ['confirmed', 'failed', 'rejected', 'not-sent
  * (the run walking its steps, or a resume after a restart). The op id is the ledger id, so it is
  * written exactly once.
  */
+/** Why a request must not go out, checked right before every send ('' = fine). */
+export function requestProblem(req: SendRequest, address: string): string {
+  if (req.kind === 'payment') {
+    if (!req.recipient || !isValidAddress(req.recipient)) return 'The recipient address isn\'t a valid Nimiq address. Nothing was sent.'
+    if (sameAddr(req.recipient, address)) return 'That\'s your own address. Nothing was sent.'
+  }
+  if (req.kind === 'newStaker' && (!req.delegation || !isValidAddress(req.delegation))) return 'That pool address isn\'t valid. Nothing was sent.'
+  if (req.kind === 'updateStaker' && (!req.newDelegation || !isValidAddress(req.newDelegation))) return 'That pool address isn\'t valid. Nothing was sent.'
+  return ''
+}
+
+const MISMATCH = 'Nimiq Pay sent from a different account than the one Kickback shows, so Kickback stopped sending. Open Kickback again from the account you use in Nimiq Pay.'
+
 /** Hashes already shared: never mistaken for a new send of the same amount. */
 export function ledgerHashes(): Set<string> {
   return new Set(usePlan().ledger.map(e => e.hash).filter((h): h is string => !!h))
@@ -70,7 +87,11 @@ export function onSettled(fn: (op: Op) => void) { listeners.push(fn) }
 const running = new Set<string>()
 
 export const useOps = defineStore('ops', {
-  state: () => ({ address: '', ops: [] as Op[] }),
+  state: () => ({
+    address: '', ops: [] as Op[],
+    /** A sent transaction came from another account than `address` (the signer it was from): no more sends. */
+    signerMismatch: '' as string,
+  }),
   getters: {
     byId: s => (id?: string) => s.ops.find(o => o.id === id),
     active: s => s.ops.filter(o => !TERMINAL.includes(o.phase)),
@@ -83,6 +104,7 @@ export const useOps = defineStore('ops', {
       this.address = address
       try { this.ops = JSON.parse(prefGet(this.key(address)) || '[]') }
       catch { this.ops = [] }
+      this.signerMismatch = prefGet(this.key(address) + ':signer') || ''
     },
     save() {
       if (!this.address) return
@@ -108,6 +130,12 @@ export const useOps = defineStore('ops', {
       this.ops.push(op)
       this.save()
       if (!op.dry) logMoney(op)
+      const problem = this.signerMismatch && !op.dry ? MISMATCH : requestProblem(req, address)
+      if (problem) {
+        this.patch(op.id, { phase: 'not-sent', error: problem })
+        useUi().showToast(problem)
+        return this.byId(op.id)!
+      }
       running.add(op.id)
       try {
         const r = await send(req)
@@ -152,7 +180,7 @@ export const useOps = defineStore('ops', {
     async confirm(id: string) {
       const op = this.byId(id)
       if (!op?.hash) return
-      const r = await waitIncluded(op.hash, { onSlow: () => this.patch(id, { slow: true }) })
+      const r = await waitIncluded(op.hash, { onSlow: () => this.patch(id, { slow: true }), onTx: tx => this.checkSigner(op, tx) })
       this.patch(id, { phase: r === 'ok' ? 'confirmed' : 'failed' })
     },
 
@@ -169,6 +197,20 @@ export const useOps = defineStore('ops', {
       running.add(opId)
       void this.confirm(opId).finally(() => running.delete(opId))
       return opId
+    },
+
+    /**
+     * Nimiq Pay signs from its own account. If a transaction we sent came from another one
+     * (remove stake: was paid to another one), stop sending and say so. Kept until the app is
+     * opened for the right account.
+     */
+    checkSigner(op: Op, tx: Tx) {
+      if (op.dry || !this.address) return
+      const ours = op.req.kind === 'remove' ? sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, op.address) : sameAddr(tx.from, op.address)
+      if (ours || this.signerMismatch) return
+      this.signerMismatch = op.req.kind === 'remove' ? tx.to : tx.from
+      prefSet(this.key(this.address) + ':signer', this.signerMismatch)
+      useUi().showToast(MISMATCH)
     },
 
     /** After a restart: continue checking anything that was in flight. Never re-sends. */

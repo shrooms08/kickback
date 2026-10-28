@@ -134,7 +134,7 @@ export type Inclusion = 'ok' | 'failed'
  * After 2 minutes `onSlow` fires once and polling carries on in the
  * background (stop it with `signal`). "Transaction not found" means not yet.
  */
-export async function waitIncluded(hash: string, opts: { onSlow?: () => void, signal?: { stopped: boolean } } = {}): Promise<Inclusion> {
+export async function waitIncluded(hash: string, opts: { onSlow?: () => void, signal?: { stopped: boolean }, onTx?: (tx: Tx) => void } = {}): Promise<Inclusion> {
   const dry = useDry()
   const start = Date.now()
   let slowFired = false
@@ -148,7 +148,10 @@ export async function waitIncluded(hash: string, opts: { onSlow?: () => void, si
       try {
         const r = await rpc<Tx | null>('getTransactionByHash', [hash], { noStore: true })
         // Only a real result counts (a fallback source missing the field keeps polling).
-        if (r.value && r.value.blockNumber > 0 && typeof r.value.executionResult === 'boolean') return r.value.executionResult ? 'ok' : 'failed'
+        if (r.value && r.value.blockNumber > 0 && typeof r.value.executionResult === 'boolean') {
+          opts.onTx?.(r.value)
+          return r.value.executionResult ? 'ok' : 'failed'
+        }
       }
       catch (error) {
         const notYet = error instanceof RpcError && typeof error.data === 'string' && error.data.startsWith('Transaction not found')
