@@ -1,9 +1,13 @@
 /** CORS and JSON helpers for Kickback's Edge Functions. */
 
-/** Production, Vercel previews of the kickback project, and local dev. ALLOWED_ORIGINS adds more. */
+/**
+ * Production, Vercel previews of the kickback project in the owner's team (hash and branch URLs
+ * end in -shrooms08s-projects.vercel.app; any other kickback-*.vercel.app can be anyone's), and
+ * local dev. ALLOWED_ORIGINS adds more.
+ */
 const ORIGINS = [
   /^https:\/\/kickback-ecru\.vercel\.app$/,
-  /^https:\/\/kickback-[a-z0-9-]+\.vercel\.app$/,
+  /^https:\/\/kickback-[a-z0-9-]+-shrooms08s-projects\.vercel\.app$/,
   /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
 ]
 
