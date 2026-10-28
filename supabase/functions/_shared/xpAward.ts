@@ -4,7 +4,7 @@ import { db } from './db.ts'
 import { getStaker, rpcFor } from './chain.ts'
 import type { Net } from './chain.ts'
 import { XP, dailyStakeXp, daySlot, questProgress, runQualifies, seasonOf, utcDay } from './xp.ts'
-import { weekKey } from './season.ts'
+import { countedRuns, weekKey } from './season.ts'
 
 const H = 3600e3
 // deno-lint-ignore no-explicit-any
@@ -42,7 +42,9 @@ export async function awardFromData(address: string, network: Net, now = Date.no
   const s = seasonOf(now)
   const week = weekKey(now), weekStart = Date.parse(week + 'T00:00:00Z')
   const seasonStart = Date.parse(s.startsAt)
-  const plan = must(await db.from('plans').select('slices, min_ready_luna, updated_at').eq('address', address).eq('network', network).maybeSingle())
+  const plan = must(await db.from('plans').select('slices, min_ready_luna, updated_at, plan_started_at').eq('address', address).eq('network', network).maybeSingle())
+  const since = plan?.plan_started_at ? Date.parse(plan.plan_started_at) : Infinity
+  const kickTimes = (must(await db.from('kickbacks_seen').select('at').eq('address', address).eq('network', network)) as Array<{ at: string }>).map(k => Date.parse(k.at))
   const minLuna = Number(plan?.min_ready_luna ?? 10_000)
   const shares = must(await db.from('shares').select('id, run_id, slice_type, amount_luna, verified, block_at, created_at')
     .eq('address', address).eq('network', network).eq('status', 'confirmed').not('run_id', 'is', null)) as ShareRow[]
@@ -56,7 +58,10 @@ export async function awardFromData(address: string, network: Net, now = Date.no
     if (x.verified || x.slice_type === 'keep') r.total += Number(x.amount_luna)
     runs.set(x.run_id!, r)
   }
-  const verifiedRuns = [...runs.entries()].filter(([, r]) => r.verified > 0 && Number.isFinite(r.at)).sort((a, b) => a[1].at - b[1].at)
+  // Same rule as milestones: after the plan started, and only runs that follow a kickback.
+  const candidates = [...runs.entries()].filter(([, r]) => r.verified > 0 && Number.isFinite(r.at) && r.at >= since)
+  const counted = new Set(countedRuns(kickTimes, candidates.map(([id, r]) => ({ id, at: r.at }))))
+  const verifiedRuns = candidates.filter(([id]) => counted.has(id)).sort((a, b) => a[1].at - b[1].at)
 
   if (!s.ended) {
     const ledger = must(await db.from('xp_ledger').select('source, ref, proof').eq('address', address).eq('network', network).eq('season', s.id).in('source', ['run', 'share'])) as Array<{ source: string, ref: string, proof: string | null }>
