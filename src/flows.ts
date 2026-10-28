@@ -24,7 +24,7 @@ import {
 const isLive = () => !useWallet().isMock
 import type { ApproveKind, RunStep } from './stores/flow'
 import { APPROVE_DELAY_MS, DEFAULT_PLAN, NO_CONTACT_PLAN } from './services/mock'
-import { nim2 } from './lib/format'
+import { addressShort, nim2 } from './lib/format'
 import { splitCents } from './lib/plan'
 import type { Split } from './lib/plan'
 import { fxArrival, fxStep } from './lib/fx'
@@ -67,6 +67,16 @@ export async function connectWallet() {
   flow.errorFrom = 'network'
   flow.errorConnect = true
   go('error')
+}
+
+/** Choose wallet: switch to another basic account and load everything for it. */
+export async function switchWallet(address: string) {
+  const wallet = useWallet(), ui = useUi()
+  if (!wallet.switchTo(address)) return
+  if (wallet.isMock) { ui.showToast(`Switched to ${addressShort(address)}`); return }
+  useSession().$patch({ status: 'off', token: null, expiresAt: 0, queue: [] })
+  await openLive()
+  ui.showToast(`Switched to ${addressShort(address)}`)
 }
 
 /** Load live data for the effective address (cache first), then show the right Home. */

@@ -2,10 +2,13 @@ import { defineStore } from 'pinia'
 import { connectAccount, detectNimiqPay, hasHostContext, isUserRejection, readBalance, toMessage } from '../services/nimiq'
 import { useDiag } from './diag'
 import { MOCK_ADDRESS, MOCK_BALANCE_NIM, MOCK_CONNECT_MS } from '../services/mock'
+
+const MOCK_SECOND_ADDRESS = 'NQ07 A3J0 7SUY 2C29 MU2T KVXF RMYV 1SE5'
 import { isNimiqAddress, lunaToNim, nimToLuna } from '../lib/format'
 import { cacheGet, cacheSet, prefGet, prefSet } from '../lib/cache'
 import { useDry } from './dry'
-import { getAccountBalance, spaced } from '../services/chain'
+import { getAccountBalance, getAccountType, spaced } from '../services/chain'
+import { pickBasic } from '../lib/wallets'
 
 /**
  * detecting:  waiting to see if Nimiq Pay injects the provider
@@ -51,6 +54,8 @@ export const useWallet = defineStore('wallet', {
     /** Where the wallet balance came from; '' = not known yet (never show a fake 0). */
     balanceSource: '' as '' | 'sdk' | 'rpc' | 'cache',
     balanceError: '',
+    /** Basic (non-contract) accounts Nimiq Pay listed. More than one: "Choose wallet". */
+    basicAccounts: [] as string[],
   }),
   getters: {
     isMock: s => s.env === 'mock',
@@ -97,7 +102,8 @@ export const useWallet = defineStore('wallet', {
       this.balanceLuna = nimToLuna(MOCK_BALANCE_NIM)
       this.connected = true
       const diag = useDiag()
-      diag.accounts = [MOCK_ADDRESS]
+      this.basicAccounts = [MOCK_ADDRESS, MOCK_SECOND_ADDRESS]
+      diag.accounts = [MOCK_ADDRESS, MOCK_SECOND_ADDRESS]
       diag.listAccountsMs = 0
       diag.recordBalance(this.balanceLuna, 0)
     },
@@ -155,6 +161,16 @@ export const useWallet = defineStore('wallet', {
       catch { /* recorded in diag */ }
       finally { diag.busy = false }
     },
+    /** Choose wallet: switch to another basic account (the caller reloads live data). */
+    switchTo(address: string): boolean {
+      if (!this.basicAccounts.includes(address) || address === this.address) return false
+      this.address = address
+      this.balanceSource = ''
+      this.balanceLuna = 0
+      prefSet('wallet-last', address)
+      if (this.env === 'nimiqpay') this.refreshWalletBalance()
+      return true
+    },
     async connect(): Promise<ConnectResult> {
       if (this.env === 'mock') {
         await new Promise(r => setTimeout(r, MOCK_CONNECT_MS))
@@ -167,7 +183,12 @@ export const useWallet = defineStore('wallet', {
       }
       try {
         const account = await connectAccount()
-        this.address = account.address
+        // Contract accounts (vesting, HTLC) are skipped: only basic accounts can stake and send.
+        const types: Record<string, string | null> = {}
+        await Promise.all(account.accounts.map(async (a) => { types[a] = await getAccountType(a) }))
+        const { basic, chosen } = pickBasic(account.accounts, types, prefGet('wallet-last'))
+        this.basicAccounts = basic
+        this.address = chosen
         this.connected = true
         this.balanceSource = ''
         this.refreshWalletBalance()

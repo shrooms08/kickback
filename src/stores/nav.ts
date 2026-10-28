@@ -3,18 +3,18 @@ import { defineStore } from 'pinia'
 export type ScreenName =
   | 'welcome' | 'connecting' | 'browser' | 'error'
   | 'home' | 'homeEmpty' | 'kickbacks' | 'plan' | 'pool'
-  | 'pools' | 'stake'
+  | 'pools' | 'stake' | 'season'
   | 'approve' | 'success' | 'run' | 'withdraw'
 
 /** Render order. Stacking is decided by z-index, so this just keeps DOM order stable. */
-export const SCREENS: ScreenName[] = ['welcome', 'home', 'homeEmpty', 'pools', 'stake', 'approve', 'success', 'kickbacks', 'plan', 'run', 'withdraw', 'pool', 'browser', 'connecting', 'error']
+export const SCREENS: ScreenName[] = ['welcome', 'home', 'homeEmpty', 'pools', 'stake', 'approve', 'success', 'kickbacks', 'plan', 'run', 'withdraw', 'pool', 'season', 'browser', 'connecting', 'error']
 
 /** Full-screen modals slide up over the screen they came from. */
 export const MODALS: ScreenName[] = ['run', 'approve', 'success', 'withdraw']
 /** Tab screens crossfade and own the tab bar. */
 export const TABS: ScreenName[] = ['home', 'homeEmpty', 'kickbacks', 'plan', 'pool']
 /** Pushed screens slide in from the right and can be swiped back. */
-export const DEPTH: Partial<Record<ScreenName, number>> = { pools: 1, stake: 2 }
+export const DEPTH: Partial<Record<ScreenName, number>> = { pools: 1, stake: 2, season: 1 }
 
 export type TransitionType = 'push' | 'pop' | 'modalIn' | 'modalOut' | 'modalSwap' | 'tab' | 'fade'
 
@@ -51,6 +51,8 @@ export const useNav = defineStore('nav', {
     busy: false,
     /** The tab that "Choose a pool" was opened from, for back and swipe-back. */
     poolsFrom: 'homeEmpty' as ScreenName,
+    /** The tab the Season screen was opened from. */
+    seasonFrom: 'home' as ScreenName,
   }),
   getters: {
     mounted(s): Set<ScreenName> {

@@ -17,6 +17,7 @@ import { ranksOf, splitCents } from '../lib/plan'
 import { splitLuna } from '../lib/money'
 import { shake } from '../lib/anim'
 import { changePlanFromRun, closeRun, holdRunDone, process, retryFailed } from '../flows'
+import { collecting } from '../lib/minReady'
 
 const flow = useFlow()
 const a = useAccount()
@@ -64,8 +65,13 @@ const stack = computed(() => {
   }
 })
 
+// Run when ready reaches: below the plan's minimum the run waits (collecting).
+const coll = computed(() => collecting(live.value ? a.readyLuna : a.readyCents * 1000, plan.minReadyLuna))
+const waitingMin = computed(() => review.value && !empty.value && coll.value.on)
+
 const reason = computed(() => {
   if (!review.value || empty.value) return ''
+  if (waitingMin.value) return `Your plan runs once ${coll.value.need} NIM is ready`
   if (wallet.isPreview) return 'Preview is read only'
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
   if (live.value) {
@@ -126,6 +132,7 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
         <p v-if="live && plan.planStartedAt == null" class="note" style="margin-top: 0">Save your plan first. Kickbacks after that are shared with it.</p>
       </div>
     </template>
+    <h1 v-else-if="waitingMin" class="kb-h1" data-kb="run-collecting">Collecting {{ coll.have }} of {{ coll.need }} NIM</h1>
     <h1 v-else-if="review" class="kb-h1">Ready to share {{ headline }} NIM</h1>
     <h1 v-else-if="running" class="kb-h1">Approve each step</h1>
     <h1 v-else-if="partial" class="kb-h1 big52">{{ okN }} of {{ flow.steps.length }} done</h1>
@@ -195,7 +202,8 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       <button class="kb-link" style="padding: 0 12px; flex: none" @click="changePlanFromRun">Change plan</button>
     </div>
 
-    <div class="foot">
+    <div class="kb-actionbar" data-kb="action-bar">
+      <div v-if="waitingMin" class="cbar"><div class="cfill" :style="{ transform: `scaleX(${coll.pct / 100})` }" /></div>
       <div v-if="reason" class="kb-reason">{{ reason }}</div>
       <div v-if="empty" class="empty-actions">
         <button class="kb-btn kb-btn-ghost" @click="changePlanFromRun">Edit plan</button>
@@ -203,7 +211,8 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       </div>
       <HoldButton v-else-if="review" label="Hold to run my plan" :disabled="!!reason" @done="holdRunDone" @blocked="shake($event.currentTarget as Element)" />
       <button v-if="stuck" class="kb-btn kb-btn-ghost" @click="closeRun">Back to home</button>
-      <button v-if="done" class="kb-btn kb-btn-primary" @click="closeRun">Back to home</button>
+      <button v-if="fullDone" class="kb-btn kb-btn-primary" data-kb="done-share" @click="ui.openSheet('share')">Share my kickbacks</button>
+      <button v-if="done" class="kb-btn" :class="fullDone ? 'kb-btn-ghost' : 'kb-btn-primary'" @click="closeRun">Back to home</button>
     </div>
   </Modal>
 </template>
@@ -242,7 +251,8 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
 .retry-btn { height: 44px; padding: 0 20px; border-radius: 999px; border: none; background: var(--kb-lime); color: var(--kb-bg); font-size: 14px; font-weight: 800; flex: none; }
 .next { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 20px; background: var(--kb-surface); }
 .next-t { font-size: 14px; line-height: 1.4; min-width: 0; }
-.foot { margin-top: auto; }
+.cbar { height: 8px; border-radius: 999px; background-color: var(--kb-raised); background-image: var(--kb-hatch-seg); background-size: 48px 48px; overflow: hidden; }
+.cfill { height: 100%; background: var(--kb-lime); transform-origin: left; }
 .empty-line { font-size: 17px; font-weight: 700; line-height: 1.35; }
 .empty-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .empty-actions .kb-btn { height: 56px; }

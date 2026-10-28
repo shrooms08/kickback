@@ -69,6 +69,12 @@ export function getAccountBalance(address: string, ttl = 60e3): Promise<Result<n
     .then(r => ({ ...r, value: Number(r.value?.balance) || 0 }))
 }
 
+/** Account type from RPC: 'basic', 'vesting', 'htlc', 'staking' (null when it can't be read). */
+export function getAccountType(address: string): Promise<string | null> {
+  return rpc<{ type?: string }>('getAccountByAddress', [address], { ttl: 24 * H })
+    .then(r => (typeof r.value?.type === 'string' ? r.value.type : 'unknown'), () => null)
+}
+
 /** Reward (payout) address and health of a validator. Cached for 24h. */
 export function getValidator(validator: string): Promise<Result<ValidatorInfo>> {
   return rpc<ValidatorInfo>('getValidatorByAddress', [validator], { ttl: 24 * H })

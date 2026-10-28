@@ -98,3 +98,15 @@ describe('Nimiq staking calculator (nimiq.com/staking port)', () => {
     expect(nimiqCalculatorRate(0.6, -0.1, { now })).toBeNull()
   })
 })
+
+import { rateText } from '../src/lib/rateText'
+describe('rate line', () => {
+  it('one decimal, "about … a year"', () => {
+    expect(rateText(0.08634)).toBe('about 8.6% a year')
+    expect(rateText(0.0777)).toBe('about 7.8% a year')
+  })
+  it('empty when unknown', () => {
+    expect(rateText(null)).toBe('')
+    expect(rateText(0)).toBe('')
+  })
+})

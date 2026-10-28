@@ -15,6 +15,7 @@ import ApproveScreen from './ApproveScreen.vue'
 import SuccessScreen from './SuccessScreen.vue'
 import RunScreen from './RunScreen.vue'
 import WithdrawScreen from './WithdrawScreen.vue'
+import SeasonScreen from './SeasonScreen.vue'
 
 export const SCREEN_COMPONENTS: Record<ScreenName, Component> = {
   welcome: WelcomeScreen,
@@ -32,4 +33,5 @@ export const SCREEN_COMPONENTS: Record<ScreenName, Component> = {
   success: SuccessScreen,
   run: RunScreen,
   withdraw: WithdrawScreen,
+  season: SeasonScreen,
 }

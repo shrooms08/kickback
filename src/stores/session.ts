@@ -26,7 +26,7 @@ type EventKind = 'connect' | 'sign_in' | 'stake' | 'add_stake' | 'plan_saved' | 
 
 interface QueueItem { id: string, kind: 'plan' | 'share' | 'event', method: 'PUT' | 'POST', body: unknown, auth: boolean, tries: number }
 interface ServerData {
-  plan: { slices: ServerSlice[], plan_started_at: string | null, updated_at: string } | null
+  plan: { slices: ServerSlice[], plan_started_at: string | null, updated_at: string, min_ready_luna?: number } | null
   contacts: Array<{ id: string, name: string, contact_address: string }>
   shares: Array<{ id: string, amount_luna: number, slice_type: 'send' | 'restake' | 'keep', tx_hash: string | null, status: string, created_at: string }>
 }
@@ -197,6 +197,7 @@ export const useSession = defineStore('session', {
           patch.saved = fromServer.saved
           patch.savedRecipient = fromServer.recipient
           patch.planStartedAt = server.plan.plan_started_at ? Date.parse(server.plan.plan_started_at) : null
+          if (server.plan.min_ready_luna) patch.minReadyLuna = Number(server.plan.min_ready_luna)
         }
       }
       else if (localOk) upload.plan = localBody
@@ -235,6 +236,7 @@ export const useSession = defineStore('session', {
       return {
         slices: slicesFromPlan(plan.saved, plan.savedRecipient),
         plan_started_at: plan.planStartedAt ? new Date(plan.planStartedAt).toISOString() : null,
+        min_ready_luna: plan.minReadyLuna,
       }
     },
 
@@ -264,15 +266,17 @@ export const useSession = defineStore('session', {
 
     pushShare(e: LedgerEntry | null | undefined, status: 'confirmed' | 'undone' = 'confirmed') {
       if (!e || e.dry || !e.id || !this.signedIn || !this.eligible) return
-      this.enqueue({ kind: 'share', method: 'POST', auth: true, body: { share: { id: e.id, amount_luna: e.luna, slice_type: e.sliceType ?? (e.hash ? 'send' : 'keep'), tx_hash: e.hash ?? null, status } } })
+      this.enqueue({ kind: 'share', method: 'POST', auth: true, body: { share: { id: e.id, amount_luna: e.luna, slice_type: e.sliceType ?? (e.hash ? 'send' : 'keep'), tx_hash: e.hash ?? null, status, ...(e.runId ? { run_id: e.runId } : {}) } } })
       this.flush()
     },
 
     /** Fire and forget. Signed in: with the address; otherwise anonymous (address left empty). */
-    pushEvent(kind: EventKind, amountLuna?: number) {
+    pushEvent(kind: EventKind, amountLuna?: number, txHash?: string) {
       if (!this.eligible) return
       const signed = this.signedIn
-      this.enqueue({ kind: 'event', method: 'POST', auth: signed, body: { event: { kind, amount_luna: amountLuna && amountLuna > 0 ? Math.round(amountLuna) : null }, network: net.network } })
+      // Stake events carry their tx hash (signed in only): the server checks it on chain before it counts.
+      const hash = signed && txHash && /^[0-9a-f]{64}$/i.test(txHash) && (kind === 'stake' || kind === 'add_stake') ? txHash.toLowerCase() : undefined
+      this.enqueue({ kind: 'event', method: 'POST', auth: signed, body: { event: { kind, amount_luna: amountLuna && amountLuna > 0 ? Math.round(amountLuna) : null, ...(hash ? { tx_hash: hash } : {}) }, network: net.network } })
       this.flush()
     },
 
@@ -327,7 +331,7 @@ export function wireSession() {
   const session = useSession(), plan = usePlan(), flow = useFlow()
   // Plan and contacts: any change to what the server stores (save, add or remove a contact,
   // undo) is pushed, debounced; changes that came from the server are not echoed back.
-  const synced = () => JSON.stringify([plan.owner, plan.contacts.map(c => [c.id, c.name, c.address]), plan.saved, plan.savedRecipient, plan.planStartedAt])
+  const synced = () => JSON.stringify([plan.owner, plan.contacts.map(c => [c.id, c.name, c.address]), plan.saved, plan.savedRecipient, plan.planStartedAt, plan.minReadyLuna])
   let last = synced(), timer = 0, applying = false
   watch(synced, (now) => {
     clearTimeout(timer)
@@ -347,7 +351,7 @@ export function wireSession() {
   onSettled((op) => {
     if (op.dry || op.phase !== 'confirmed') return
     const r = op.req
-    if (op.flow === 'stake') session.pushEvent(r.kind === 'newStaker' ? 'stake' : 'add_stake', r.value)
+    if (op.flow === 'stake') session.pushEvent(r.kind === 'newStaker' ? 'stake' : 'add_stake', r.value, op.hash)
     else if (op.flow === 'unstake') session.pushEvent('stop')
     else if (op.flow === 'withdraw' && r.kind === 'remove') session.pushEvent('withdraw', r.value)
     else if (op.flow === 'switch') session.pushEvent('switch')

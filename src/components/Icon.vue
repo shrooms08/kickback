@@ -4,10 +4,22 @@ export type IconName =
   | 'copy' | 'check' | 'back' | 'close' | 'plus' | 'minus' | 'arrow' | 'lock' | 'shield' | 'shieldCheck'
   | 'retry' | 'offline' | 'clock' | 'warning' | 'trend' | 'kickback' | 'backspace' | 'phoneCheck'
   | 'home' | 'bars' | 'plan' | 'run' | 'wallet'
+  | 'bell' | 'share' | 'download' | 'info' | 'chevronDown' | 'heart' | 'coins' | 'ring' | 'user' | 'calendar' | 'link'
 
 const props = withDefaults(defineProps<{ name: IconName, size?: number, stroke?: number, color?: string }>(), { size: 20, stroke: 2 })
 
 const PATHS: Record<IconName, string> = {
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  share: '<path d="M12 15V4"/><path d="M8 8l4-4 4 4"/><path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
+  download: '<path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/>',
+  chevronDown: '<path d="M7 10l5 5 5-5"/>',
+  heart: '<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/>',
+  coins: '<ellipse cx="9" cy="7" rx="5" ry="2.5"/><path d="M4 7v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V7"/><path d="M10 15.6c.6 1.1 2.6 1.9 5 1.9 2.8 0 5-1.1 5-2.5v-4c0-1.2-1.6-2.2-3.9-2.4"/>',
+  ring: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 8 8"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+  calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="3"/><path d="M4 10h16"/><path d="M9 3.5v4M15 3.5v4"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   back: '<path d="M15 18l-6-6 6-6"/>',

@@ -5,6 +5,7 @@ import { sameSplit } from '../lib/plan'
 import type { Split } from '../lib/plan'
 import type { LedgerEntry } from '../lib/money'
 import { prefGet, prefSet } from '../lib/cache'
+import { DEFAULT_MIN_READY, MIN_READY_CHOICES } from '../lib/minReady'
 
 /** One slice of a plan, in order. Send slices carry their contact. */
 export type Slice =
@@ -18,6 +19,8 @@ interface Persisted {
   savedRecipient: string | null
   planStartedAt: number | null
   ledger: LedgerEntry[]
+  /** Run when ready reaches (Luna). */
+  minReadyLuna?: number
   /** Testnet only: test kickbacks marked in Diagnostics. */
   marked?: MarkedKickback[]
 }
@@ -55,6 +58,8 @@ export const usePlan = defineStore('plan', {
     ledger: [] as LedgerEntry[],
     /** Testnet only: test kickbacks marked in Diagnostics (plans are stored per network). */
     marked: [] as MarkedKickback[],
+    /** Run when ready reaches: 0.10 / 1 / 5 NIM (Luna). */
+    minReadyLuna: DEFAULT_MIN_READY as number,
     contacts: DEFAULT_CONTACTS.slice() as Contact[],
     saved: DEFAULT_PLAN.slice() as Split,
     savedRecipient: 'mom' as string | null,
@@ -115,7 +120,7 @@ export const usePlan = defineStore('plan', {
       catch { p = null }
       const d: Persisted = p ?? { contacts: [], saved: NO_CONTACT_PLAN.slice() as Split, savedRecipient: null, planStartedAt: null, ledger: [] }
       lastWritten = ''
-      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
+      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], minReadyLuna: d.minReadyLuna ?? DEFAULT_MIN_READY, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
       // Older plans could hold a send share with no recipient while Home and the Plan tab
       // showed the first contact: store that contact, so what is shown is what runs and syncs.
       if (this.contacts.length && !this.contacts.some(c => c.id === this.savedRecipient)) this.savedRecipient = this.resolveRecipient(this.savedRecipient)
@@ -124,7 +129,7 @@ export const usePlan = defineStore('plan', {
     },
     persist() {
       if (!this.owner) return
-      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, ...(this.marked.length ? { marked: this.marked } : {}) }
+      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}) }
       const json = JSON.stringify(d)
       if (json === lastWritten) return
       lastWritten = json
@@ -137,9 +142,9 @@ export const usePlan = defineStore('plan', {
       this.$subscribe(() => this.persist())
     },
     /** A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones. */
-    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep'): LedgerEntry | null {
+    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep', runId?: string): LedgerEntry | null {
       if (luna <= 0) return null
-      const entry: LedgerEntry = { id: newId(), luna, at: Date.now(), hash, sliceType, ...(dry ? { dry: true } : {}) }
+      const entry: LedgerEntry = { id: newId(), luna, at: Date.now(), hash, sliceType, ...(runId ? { runId } : {}), ...(dry ? { dry: true } : {}) }
       this.ledger.push(entry)
       this.persist()
       return entry
@@ -154,13 +159,19 @@ export const usePlan = defineStore('plan', {
      * Server data wins (sign-in merge, sync). Real (not dry-run) ledger entries are replaced
      * by the server's shares; dry-run entries stay local.
      */
-    applyServer(d: { contacts?: Contact[], saved?: Split, savedRecipient?: string | null, planStartedAt?: number | null, realLedger?: LedgerEntry[] }) {
+    applyServer(d: { contacts?: Contact[], saved?: Split, savedRecipient?: string | null, planStartedAt?: number | null, realLedger?: LedgerEntry[], minReadyLuna?: number }) {
       if (d.contacts) this.contacts = d.contacts
+      if (d.minReadyLuna && (MIN_READY_CHOICES as readonly number[]).includes(d.minReadyLuna)) this.minReadyLuna = d.minReadyLuna
       if (d.saved) { this.saved = d.saved; this.pct = d.saved.slice() as Split }
       if (d.savedRecipient !== undefined) this.savedRecipient = d.savedRecipient
       this.recipient = this.resolveRecipient(this.savedRecipient)
       if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
       if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
+      this.persist()
+    },
+    setMinReady(luna: number) {
+      if (!(MIN_READY_CHOICES as readonly number[]).includes(luna)) return
+      this.minReadyLuna = luna
       this.persist()
     },
     /** Testnet: mark real NIM already in the wallet as a ready-to-share test kickback. */

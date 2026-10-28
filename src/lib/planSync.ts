@@ -3,7 +3,7 @@
 import type { Split } from './plan'
 
 export interface ServerSlice { type: 'send' | 'restake' | 'keep', percent: number, contact_id: string | null }
-export type PlanBody = { slices: ServerSlice[], plan_started_at: string | null }
+export type PlanBody = { slices: ServerSlice[], plan_started_at: string | null, min_ready_luna?: number }
 
 /**
  * Why a plan can't be stored (the server's rules, checked before sending): one slice per type,

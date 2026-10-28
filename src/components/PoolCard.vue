@@ -2,6 +2,7 @@
 import SegmentedBar from './SegmentedBar.vue'
 import type { Pool } from '../services/mock'
 import { bump } from '../lib/anim'
+import { rateText } from '../lib/rateText'
 
 // A pool to pick on "Pick a pool": fee, payout schedule, trust score bar, last payout.
 defineProps<{ pool: Pool, selected: boolean }>()
@@ -23,6 +24,7 @@ function onPick(e: MouseEvent) {
       <div><div class="kb-eyebrow">Fee</div><div class="fee">{{ pool.fee }}</div></div>
       <div><div class="kb-eyebrow">Pays</div><div class="pays">{{ pool.pays }}</div></div>
     </div>
+    <div v-if="pool.apyNet" class="rate" data-kb="pool-rate"><span class="kb-dot" />{{ rateText(pool.apyNet) }} after the fee · Nimiq staking calculator</div>
     <div class="trust">
       <div class="trust-row"><span class="kb-dim">Trust score</span><span class="score">{{ pool.trust }} / 10</span></div>
       <SegmentedBar :segments="10" :value="pool.trust" size="lg" />
@@ -34,6 +36,7 @@ function onPick(e: MouseEvent) {
 </template>
 
 <style scoped>
+.rate { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--kb-text-2); margin-top: -6px; }
 .card {
   border-radius: var(--kb-r-card-lg); background: var(--kb-surface); border: 2px solid var(--kb-line); padding: 20px;
   display: flex; flex-direction: column; gap: 18px;

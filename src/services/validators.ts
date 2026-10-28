@@ -1,8 +1,9 @@
+import { nimiqCalculatorRate } from '../lib/rate'
 // Nimiq Validators API (mainnet, or the testnet deployment on testnet). Responses carry base64 logos (the direct
 // list is ~380 KB, the known list ~1.3 MB), so results are trimmed to the
 // fields Kickback uses before they are cached.
 import { cacheGet, cacheSet, ageMs } from '../lib/cache'
-import { net } from '../lib/net'
+import { isTestnet, net } from '../lib/net'
 
 export const VALIDATORS_API = net.validatorsApiUrl
 
@@ -93,17 +94,29 @@ export function supply() {
   return cached<ApiSupply>('api:supply', 6 * 3600e3, '/api/v1/supply', (raw: any) => ({ total: Number(raw.total), staking: Number(raw.staking) }))
 }
 
-// ---------- estimated reward rate ----------
-// From core-rs-albatross policy.rs: the remaining supply decays by SUPPLY_DECAY
-// every millisecond, so next year's emission = remaining * (1 - DECAY^msPerYear).
-// Spread over all stake, that is the gross staking reward rate.
-const TOTAL_SUPPLY = 2_100_000_000_000_000
-const SUPPLY_DECAY = 0.9999999999960264
-const MS_PER_YEAR = 365.25 * 24 * 3600e3
+// ---------- reward rate: the Nimiq staking calculator ----------
+// nimiq.com/staking computes the rate from one input, the staked ratio, which it reads from
+// /api/staking-info. We do the same (src/lib/rate.ts is the exact port), falling back to the
+// Validators API supply (staking / total) when that endpoint is unreachable or on testnet.
+const STAKING_INFO = 'https://nimiq-website.je-cf9.workers.dev/api/staking-info'
 
-export function grossStakingApy(s: ApiSupply): number | null {
-  if (!s.total || !s.staking) return null
-  const remaining = TOTAL_SUPPLY - s.total
-  const emission = remaining * (1 - Math.pow(SUPPLY_DECAY, MS_PER_YEAR))
-  return emission / s.staking
+export async function stakedRatio(s: ApiSupply | null): Promise<{ ratio: number, source: 'nimiq.com' | 'validators-api' } | null> {
+  if (!isTestnet) {
+    const c = cacheGet<number>('api:stakedRatio')
+    if (c && ageMs(c) < 6 * 3600e3) return { ratio: c.v, source: 'nimiq.com' }
+    try {
+      const r = await fetch(STAKING_INFO, { signal: AbortSignal.timeout(8000) })
+      const j = await r.json() as { stakedRatio?: number }
+      if (r.ok && typeof j.stakedRatio === 'number' && j.stakedRatio > 0 && j.stakedRatio <= 1) { cacheSet('api:stakedRatio', j.stakedRatio); return { ratio: j.stakedRatio, source: 'nimiq.com' } }
+    }
+    catch { /* fall back */ }
+    if (c) return { ratio: c.v, source: 'nimiq.com' }
+  }
+  if (s?.total && s.staking) return { ratio: s.staking / s.total, source: 'validators-api' }
+  return null
+}
+
+/** Gross rate (before the pool fee) from the Nimiq staking calculator, or null. */
+export function calculatorGross(ratio: number | null | undefined): number | null {
+  return ratio ? nimiqCalculatorRate(ratio, 0, { chain: isTestnet ? 'test' : 'main' }) : null
 }

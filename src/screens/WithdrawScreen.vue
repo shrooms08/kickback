@@ -40,7 +40,7 @@ function close() {
     <p v-else class="lead">{{ flow.wSteps.length > 1 ? 'Two steps, each approved in Nimiq Pay: unlock your stake, then move it to your wallet.' : 'One step, approved in Nimiq Pay.' }}</p>
     <StepList :steps="flow.wSteps" />
     <div v-if="!done" class="kb-safe-line"><Icon name="shieldCheck" :size="18" /><span>Your NIM only ever moves to your own wallet.</span></div>
-    <div class="foot">
+    <div class="kb-actionbar" data-kb="action-bar">
       <div v-if="reason" class="kb-reason">{{ reason }}</div>
       <button v-if="done" class="kb-btn kb-btn-primary" @click="close">Back to pool</button>
       <HoldButton v-else-if="flow.wPhase !== 'running'" label="Hold to withdraw" :disabled="!!reason || !flow.wSteps.length" @done="runWithdraw" />
@@ -54,5 +54,4 @@ function close() {
 .big { font-size: 64px; line-height: .9; letter-spacing: -0.03em; }
 .tick { width: 52px; height: 52px; border-radius: 50%; background: var(--kb-lime); color: var(--kb-bg); display: grid; place-items: center; box-shadow: 0 0 40px rgba(200, 240, 74, .45); }
 .lead { font-size: 15px; line-height: 1.45; color: var(--kb-text-2); }
-.foot { margin-top: auto; }
 </style>
