@@ -85,6 +85,15 @@ export async function switchWallet(address: string) {
   ui.showToast(own ? 'Back to your Nimiq Pay wallet' : `Viewing ${addressShort(address)} read only. Nimiq Pay pays from ${addressShort(wallet.address)}.`)
 }
 
+/** Does Nimiq Pay answer (SDK getBalance, through Nimiq Pay, not our RPC)? 6 s at most. */
+async function sdkAnswers(): Promise<boolean> {
+  const wallet = useWallet()
+  if (wallet.env !== 'nimiqpay' || wallet.isPreview) return false
+  if (wallet.balanceSource === 'sdk') return true
+  try { await Promise.race([wallet.freshBalance(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))]); return true }
+  catch { return false }
+}
+
 /** Load live data for the effective address (cache first), then show the right Home. */
 export async function openLive() {
   const flow = useFlow(), account = useAccount()
@@ -92,6 +101,14 @@ export async function openLive() {
   if (nav.screen !== 'connecting') go('connecting')
   const r = await useLive().start()
   restoreRun()
+  // No cached data and the chain can't be read: open the app in degraded mode if Nimiq Pay itself
+  // answers (balance via the SDK). Only when that fails too does the full-screen error show.
+  if (r === 'failed' && await sdkAnswers()) {
+    account.$patch({ chainUnknown: true, stale: true })
+    go('homeEmpty')
+    void useSession().start(useWallet().address)
+    return
+  }
   if (r === 'failed') {
     flow.errorFrom = 'network'
     flow.errorConnect = false

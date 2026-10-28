@@ -202,7 +202,7 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
       <button class="kb-link" style="padding: 0 12px; flex: none" @click="changePlanFromRun">Change plan</button>
     </div>
 
-    <div class="kb-actionbar" data-kb="action-bar">
+    <div class="kb-actionbar foot" data-kb="action-bar">
       <div v-if="waitingMin" class="cbar"><div class="cfill" :style="{ transform: `scaleX(${coll.pct / 100})` }" /></div>
       <div v-if="reason" class="kb-reason">{{ reason }}</div>
       <div v-if="empty" class="empty-actions">

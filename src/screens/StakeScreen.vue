@@ -47,6 +47,7 @@ const reason = computed(() => {
   if (wallet.isPreview) return 'Preview is read only'
   if (live.value) {
     if (account.offline) return 'You\'re offline. Reconnect to stake.'
+    if (account.chainUnknown) return 'Can\'t check your stake right now. Try again in a minute.'
     if (mode.value === 'other') return `You're staking with ${account.poolName}. Switch pool to move your stake.`
     if (!wallet.balanceKnown) return 'Reading your balance…'
     const max = nim2(maxStake(wallet.effectiveBalanceLuna) / 1e5)
@@ -134,7 +135,7 @@ function press(k: string) {
           <template v-else>{{ k }}</template>
         </button>
       </div>
-      <div class="kb-actionbar" style="--kb-ab-pb: 20px" data-kb="action-bar">
+      <div class="kb-actionbar foot" style="--kb-ab-pb: 20px" data-kb="action-bar">
         <div v-if="reason" class="kb-reason">{{ reason }}</div>
         <HoldButton :label="mode === 'add' ? 'Hold to add' : 'Hold to stake'" :disabled="!!reason" @done="holdStakeDone" @blocked="shake(amountEl)" />
         <button v-if="mode === 'other'" class="kb-btn kb-btn-ghost" @click="ui.openSheet('switch')">Switch pool</button>

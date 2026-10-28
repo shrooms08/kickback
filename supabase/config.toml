@@ -431,3 +431,6 @@ verify_jwt = false
 
 [functions.season]
 verify_jwt = false
+
+[functions.rpc-proxy]
+verify_jwt = false

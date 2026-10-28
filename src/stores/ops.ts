@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { logMoney } from '../lib/moneylog'
 import { prefGet, prefSet } from '../lib/cache'
-import { findOnChain, send, waitIncluded } from '../services/tx'
+import { UNKNOWN, findOnChain, send, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
 
@@ -97,11 +97,19 @@ export const useOps = defineStore('ops', {
     },
 
     /** Uncertain error: search the chain before saying anything. */
-    async check(id: string, error?: string) {
+    async check(id: string, error?: string): Promise<void> {
       const op = this.byId(id)
       if (!op) return
       this.patch(id, { phase: 'checking', error })
       const hash = await findOnChain(op.address, op.req, op.startedAt, left => this.patch(id, { checkLeft: Math.ceil(left / 1000) }))
+      if (hash === UNKNOWN) {
+        // The chain couldn't be read: it may have gone out. Stay "checking" (still in flight, no
+        // re-send offered) and look again in 30 s, until a node can say for sure.
+        this.patch(id, { checkLeft: 0, slow: true })
+        await new Promise(r => setTimeout(r, 30_000))
+        if (this.byId(id)?.phase === 'checking') return this.check(id, error)
+        return
+      }
       if (hash) {
         this.patch(id, { phase: 'confirming', hash, sentAt: op.sentAt ?? Date.now() })
         await this.confirm(id)

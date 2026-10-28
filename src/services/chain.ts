@@ -2,6 +2,7 @@
 import { rpc, rpcPeek } from './rpc'
 import type { Result } from './rpc'
 import { prefGet, prefSet } from '../lib/cache'
+import { knownReward } from './knownPools'
 import { isTestnet, net } from '../lib/net'
 
 export const COINBASE = 'NQ81 C01N BASE 0000 0000 0000 0000 0000 0000'
@@ -292,6 +293,16 @@ const SEED_PROBES: Record<string, string[]> = {
   'NQ16373TEQ2VJX5BME74G0563TA975L3P717': ['NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8', 'NQ33 VCNC TLSY 10X3 BKJ7 NSY1 B6F6 R0J9 1SUK'],
   // ObsidianStake reward address
   'NQ155JNSU7CERAH53T02F8A9JCT6QMG97TSV': ['NQ11 NMR7 4E14 CD4Q 3YEQ DJ67 5L6G YAM7 RNF4', 'NQ47 P7A4 FB6L FCG1 LGU9 B8UE AXV8 ADH8 5XVR'],
+}
+
+/**
+ * A validator's reward address: from getValidatorByAddress, or, when that can't be read (no
+ * JSON-RPC node up; the REST fallback has no validator route), from the fixed table of known
+ * direct pools. Never guessed from where some staker delegates.
+ */
+export async function rewardOf(validator: string): Promise<string | null> {
+  try { return (await getValidator(validator)).value.rewardAddress || null }
+  catch { return knownReward(validator) }
 }
 
 function learnedProbes(reward: string): string[] {

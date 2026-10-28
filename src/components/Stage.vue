@@ -132,7 +132,10 @@ const banner = computed(() => {
   const mins = wallet.isMock ? 14 : account.staleMin
   // The plan couldn't be backed up (rejected or invalid): it stays on the phone, Retry sends it again.
   if (session.planError && isTab(scr)) return { kind: 'sync' as const, text: session.planError, label: 'Retry', act: () => session.retryPlan() }
-  if (account.stale && isTab(scr)) return { kind: 'stale' as const, text: account.refreshing ? 'Refreshing…' : `Showing data from ${mins >= 120 ? `${Math.round(mins / 60)}h` : `${mins} min`} ago`, label: account.refreshing ? 'Wait' : 'Refresh', act: refreshStale }
+  if ((account.stale || account.chainUnknown) && isTab(scr)) {
+    const when = account.chainUnknown ? 'Retrying in the background.' : mins < 1 ? 'Showing the latest data we have.' : `Showing data from ${mins >= 120 ? `${Math.round(mins / 60)}h` : `${mins} min`} ago.`
+    return { kind: 'stale' as const, text: account.refreshing ? 'Refreshing…' : `Network data is delayed. ${when}`, label: account.refreshing ? 'Wait' : 'Retry', act: refreshStale }
+  }
   if (account.poolDown && (scr === 'home' || scr === 'pool')) {
     const silent = wallet.isMock || !account.poolLastPaidAt ? '2 days' : span(now.value - account.poolLastPaidAt)
     return { kind: 'pool' as const, text: `${account.poolName} hasn't paid in ${silent}`, label: 'Switch pool', act: goPools }

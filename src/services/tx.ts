@@ -1,6 +1,6 @@
 // Transaction lifecycle helpers: send, check the chain after an uncertain
 // error, and wait for inclusion. Dry run swaps in the fake chain.
-import { rpc, RpcError } from './rpc'
+import { rpc, rpcSource, RpcError } from './rpc'
 import { STAKING_CONTRACT, sameAddr } from './chain'
 import type { Tx } from './chain'
 import { submit } from './nimiq'
@@ -49,14 +49,20 @@ export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, m
   }
 }
 
+/** The chain couldn't be read reliably: never conclude "not sent" from that. */
+export const UNKNOWN = Symbol('unknown')
+
 /**
  * After a network or unknown error, look for the transaction on chain before
  * saying anything: newest 25 transactions of the address every 5 s, for up to
- * 60 s (10 s in dry run). Returns the hash if it went out.
+ * 60 s (10 s in dry run). Returns the hash if it went out, null if a JSON-RPC node
+ * answered and it isn't there, UNKNOWN if nothing (or only the REST indexer or the
+ * proxy, which can lag) could be read: the caller keeps checking and never offers a re-send.
  */
-export async function findOnChain(me: string, req: SendRequest, since: number, onTick?: (msLeft: number) => void): Promise<string | null> {
+export async function findOnChain(me: string, req: SendRequest, since: number, onTick?: (msLeft: number) => void, opts: { windowMs?: number } = {}): Promise<string | null | typeof UNKNOWN> {
   const dry = useDry()
-  const window = dry.on ? DRY_CHECK_WINDOW_MS : CHECK_WINDOW_MS
+  const window = opts.windowMs ?? (dry.on ? DRY_CHECK_WINDOW_MS : CHECK_WINDOW_MS)
+  let directReads = 0
   const end = Date.now() + window
   for (;;) {
     if (dry.on) {
@@ -68,12 +74,13 @@ export async function findOnChain(me: string, req: SendRequest, since: number, o
         const r = await rpc<Tx[]>('getTransactionsByAddress', [me, 25, null], { noStore: true })
         const hit = (r.value || []).find(t => t.timestamp >= since - 30_000 && matches(t, req, me))
         if (hit) return hit.hash
+        if (rpcSource(r.value) === 'direct') directReads++
       }
       catch { /* keep looking until the window closes */ }
     }
     const left = end - Date.now()
     onTick?.(Math.max(0, left))
-    if (left <= 0) return null
+    if (left <= 0) return dry.on || directReads > 0 ? null : UNKNOWN
     await sleep(Math.min(5000, left))
   }
 }
@@ -98,7 +105,8 @@ export async function waitIncluded(hash: string, opts: { onSlow?: () => void, si
     else {
       try {
         const r = await rpc<Tx | null>('getTransactionByHash', [hash], { noStore: true })
-        if (r.value && r.value.blockNumber > 0) return r.value.executionResult === false ? 'failed' : 'ok'
+        // Only a real result counts (a fallback source missing the field keeps polling).
+        if (r.value && r.value.blockNumber > 0 && typeof r.value.executionResult === 'boolean') return r.value.executionResult ? 'ok' : 'failed'
       }
       catch (error) {
         const notYet = error instanceof RpcError && typeof error.data === 'string' && error.data.startsWith('Transaction not found')

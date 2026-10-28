@@ -83,6 +83,8 @@ export async function stakeLive() {
   const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
   if (previewBlocked()) return
   if (useOps().active.some(o => o.flow === 'stake')) return ui.showToast('Your stake is still confirming. Nothing else to do.')
+  // Degraded mode: the stake couldn't be read, so we can't tell a first stake from adding more.
+  if (account.chainUnknown) return ui.showToast('Can\'t check your stake right now. Try again in a minute.')
   const pool = data.pool(flow.poolPick)
   // Never send with a placeholder: the delegation must be a real validator address.
   // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
