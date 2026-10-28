@@ -160,11 +160,13 @@ export const usePlan = defineStore('plan', {
      * by the server's shares; dry-run entries stay local.
      */
     applyServer(d: { contacts?: Contact[], saved?: Split, savedRecipient?: string | null, planStartedAt?: number | null, realLedger?: LedgerEntry[], minReadyLuna?: number }) {
+      // Unsaved edits in the plan editor stay put: server data only replaces the saved plan.
+      const editing = this.dirty
       if (d.contacts) this.contacts = d.contacts
       if (d.minReadyLuna && (MIN_READY_CHOICES as readonly number[]).includes(d.minReadyLuna)) this.minReadyLuna = d.minReadyLuna
-      if (d.saved) { this.saved = d.saved; this.pct = d.saved.slice() as Split }
+      if (d.saved) { this.saved = d.saved; if (!editing) this.pct = d.saved.slice() as Split }
       if (d.savedRecipient !== undefined) this.savedRecipient = d.savedRecipient
-      this.recipient = this.resolveRecipient(this.savedRecipient)
+      if (!editing || !this.contacts.some(c => c.id === this.recipient)) this.recipient = this.resolveRecipient(editing ? this.recipient : this.savedRecipient)
       if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
       if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
       this.persist()
