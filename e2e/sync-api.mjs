@@ -1,7 +1,7 @@
-// Edge Function test for sync (deployed project, testnet, a freshly generated wallet key):
+// Edge Function test for sync (testnet, a freshly generated wallet key):
 // a plan whose send slice names one of the user's contacts is stored with that contact_id,
 // exactly; one naming a missing contact (or none) is rejected and the stored plan is unchanged.
-// Usage: node e2e/sync-api.mjs
+// Usage: node e2e/sync-api.mjs [functionsBaseUrl]   (default: the local stack, supabase start + functions serve)
 import { randomBytes } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { blake2b } from '@noble/hashes/blake2.js'
@@ -9,7 +9,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { createNimiqVerifier, signedMessageData } from '../supabase/functions/_shared/nimiqSignature.ts'
 import { signInMessage } from '../supabase/functions/_shared/signin.ts'
 
-const FN = 'https://dhjcilstkumeglweddev.supabase.co/functions/v1'
+const FN = process.argv[2] || 'http://127.0.0.1:54321/functions/v1'
 const results = []
 const log = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`) }
 const hex = b => Buffer.from(b).toString('hex')
