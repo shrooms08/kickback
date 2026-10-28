@@ -62,7 +62,7 @@ export function createRpc(url: string, budget = 14) {
       if (res.status === 429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
       if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
       const body = await res.json()
-      if (body.error) throw new Error(`${method}: ${body.error.message ?? JSON.stringify(body.error)}`)
+      if (body.error) throw new Error(rpcErrorText(method, body.error))
       return body.result?.data as T
     }
   }
@@ -70,6 +70,12 @@ export function createRpc(url: string, budget = 14) {
 }
 
 export type Rpc = ReturnType<typeof createRpc>
+
+/** The node puts the useful part ("No staker with address …") in error.data: keep it. */
+export function rpcErrorText(method: string, e: { message?: string, data?: unknown }): string {
+  const data = typeof e.data === 'string' ? e.data : e.data != null ? JSON.stringify(e.data) : ''
+  return `${method}: ${e.message ?? 'error'}${data ? `: ${data}` : ''}`
+}
 
 export interface PayoutStats { lastPaidAt: number | null, intervalH: number | null, batches: number[], source: 'probe' | 'scan' | 'none', probe?: string }
 

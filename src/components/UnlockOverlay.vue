@@ -36,7 +36,7 @@ function later() { season.celebrate = null }
 </template>
 
 <style scoped>
-.ov { position: absolute; inset: 0; z-index: 90; background: rgba(11, 13, 28, .96); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px 24px calc(28px + var(--kb-safe-bottom)); animation: kbFade 220ms ease-out both; }
+.ov { position: absolute; inset: 0; z-index: 90; background: var(--kb-bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px 24px calc(28px + var(--kb-safe-bottom)); animation: kbFade 220ms ease-out both; }
 .burst { position: relative; width: 170px; height: 170px; display: grid; place-items: center; }
 .rays { position: absolute; inset: 0; border-radius: 50%; background: repeating-conic-gradient(from 0deg, rgba(200, 240, 74, .35) 0 4deg, transparent 4deg 15deg); -webkit-mask-image: radial-gradient(circle, #000 30%, transparent 70%); mask-image: radial-gradient(circle, #000 30%, transparent 70%); animation: kbspin 40s linear infinite; }
 .coin { position: relative; width: 84px; height: 84px; border-radius: 50%; background: var(--kb-lime); display: grid; place-items: center; box-shadow: 0 16px 50px rgba(200, 240, 74, .35); animation: kbPop 500ms var(--kb-ease) both; }

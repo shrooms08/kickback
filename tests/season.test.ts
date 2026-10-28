@@ -156,3 +156,20 @@ describe('share and event validation (season fields)', () => {
     expect(() => validateEvent({ kind: 'stake', tx_hash: 'xyz' })).toThrow(ValidationError)
   })
 })
+
+import { isNotFound } from '../supabase/functions/_shared/chain'
+import { rpcErrorText } from '../supabase/functions/_shared/payouts'
+
+describe('RPC "not found" is told apart from network trouble', () => {
+  it('keeps the detail the node puts in error.data', () => {
+    expect(rpcErrorText('getStakerByAddress', { code: -32603, message: 'Internal error', data: 'No staker with address: NQ03 J45B' })).toBe('getStakerByAddress: Internal error: No staker with address: NQ03 J45B')
+  })
+  it('unknown staker and unknown tx are "not found"', () => {
+    expect(isNotFound(new Error('getStakerByAddress: Internal error: No staker with address: NQ03'))).toBe(true)
+    expect(isNotFound(new Error('getTransactionByHash: Internal error: Transaction not found: af06'))).toBe(true)
+  })
+  it('HTTP errors and timeouts are not', () => {
+    expect(isNotFound(new Error('getStakerByAddress: HTTP 503'))).toBe(false)
+    expect(isNotFound(new Error('getStakerByAddress: Internal error'))).toBe(false)
+  })
+})

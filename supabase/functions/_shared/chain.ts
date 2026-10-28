@@ -14,7 +14,9 @@ export function rpcFor(net: Net): Rpc {
   return clients[net] ??= createRpc(Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET' : 'RPC_TESTNET') || RPC_URL[net], 12)
 }
 
-const notFound = (e: unknown) => /not\s*found|no\s+such|unknown (transaction|account|staker)|does not exist/i.test(String((e as Error)?.message ?? e))
+/** The node answered "there is no such thing" (as opposed to HTTP trouble or a timeout). */
+export const isNotFound = (e: unknown) => /not\s*found|no\s+such|no staker with|no validator with|no account with|does not exist/i.test(String((e as Error)?.message ?? e))
+const notFound = isNotFound
 
 export async function getTx(rpc: Rpc, hash: string): Promise<ChainTx | null> {
   try { return await rpc.call<ChainTx>('getTransactionByHash', [hash]) ?? null }
