@@ -160,3 +160,29 @@ describe('audit 3: a second hold while the first is still starting does nothing'
     expect(tx.send).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('audit 6: adding to an existing stake works with any pool', () => {
+  const st = { address: ME, balance: 200_00000, delegation: POOL, inactiveBalance: 0, inactiveFrom: null, retiredBalance: 0 }
+  it('a staker in a restaking pool can add stake', async () => {
+    const s = await setup()
+    staker.value = st
+    s.data.known = { p1: { id: 'p1', name: 'Restaker', validator: POOL, payoutType: 'restake' } } as never
+    s.flow.$patch({ poolPick: 'p1' as never, amount: '50' })
+    await s.money.stakeLive()
+    expect(tx.send).toHaveBeenCalledWith({ kind: 'addStake', value: 50_00000 })
+  })
+  it('a staker whose pool is only a placeholder (unknown payout type) can add stake', async () => {
+    const s = await setup()
+    staker.value = st
+    s.flow.$patch({ poolPick: POOL as never, amount: '50' })
+    await s.money.stakeLive()
+    expect(tx.send).toHaveBeenCalledWith({ kind: 'addStake', value: 50_00000 })
+  })
+  it('a new staker still needs a direct-payout pool', async () => {
+    const s = await setup()
+    s.flow.$patch({ poolPick: POOL as never, amount: '200' })
+    await s.money.stakeLive()
+    expect(tx.send).not.toHaveBeenCalled()
+    expect(s.toasts).toContain('Pick a pool first.')
+  })
+})

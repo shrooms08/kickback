@@ -128,11 +128,12 @@ async function stakeLocked(release: () => void) {
   // Degraded mode: the stake couldn't be read, so we can't tell a first stake from adding more.
   if (account.chainUnknown) return ui.showToast('Can\'t check your stake right now. Try again in a minute.')
   const pool = data.pool(flow.poolPick)
-  // Never send with a placeholder: the delegation must be a real validator address.
-  // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
-  if (!isValidAddress(pool.validator) || (pool.payoutType !== 'direct' && !isTestnet)) { ui.showToast('Pick a pool first.'); return go('pools') }
   const st = currentStaker()
   const isNew = !st || st.balance + st.inactiveBalance + st.retiredBalance === 0
+  // A new stake delegates: never to a placeholder, and (mainnet) only to a direct-payout pool.
+  // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
+  // Adding stake keeps the current delegation, whatever kind of pool it is.
+  if (isNew && (!isValidAddress(pool.validator) || (pool.payoutType !== 'direct' && !isTestnet))) { ui.showToast('Pick a pool first.'); return go('pools') }
   if (!isNew && !sameAddr(st!.delegation, pool.validator)) return ui.openSheet('switch')
   const amount = parseNimInput(flow.amount)
   const bal = await freshBalanceOrToast()
