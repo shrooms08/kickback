@@ -207,3 +207,36 @@ describe('RPC errors (review fixes)', () => {
     expect(isNotFound(new Error('getTransactionByHash: Method not found'))).toBe(false)
   })
 })
+
+import { everStaked } from '../supabase/functions/_shared/verify'
+describe('"never staked before" reads the whole history (audit 11)', () => {
+  const ME = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8', OTHER = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
+  const tx = (i: number, from = OTHER, to = ME) => ({ hash: `h${i}`, from, to, value: 1, timestamp: i })
+  /** Newest first, 100 a page; `stake` puts a stake tx at that index. */
+  function chain(total: number, stake?: { at: number, out?: boolean }) {
+    const all = Array.from({ length: total }, (_, i) => stake && i === stake.at ? (stake.out ? tx(i, STAKING_CONTRACT, ME) : tx(i, ME, STAKING_CONTRACT)) : tx(i))
+    const pages: Array<string | null> = []
+    const page = async (startAt: string | null) => {
+      pages.push(startAt)
+      const from = startAt === null ? 0 : all.findIndex(t => t.hash === startAt) + 1
+      return all.slice(from, from + 100)
+    }
+    return { page, pages }
+  }
+  it('finds a stake tx past the first 100', async () => {
+    const c = chain(350, { at: 260 })
+    expect(await everStaked(c.page, ME)).toBe(true)
+    expect(c.pages).toEqual([null, 'h99', 'h199'])
+  })
+  it('an unstake payout from the staking contract counts as having staked', async () => {
+    expect(await everStaked(chain(150, { at: 120, out: true }).page, ME)).toBe(true)
+  })
+  it('no stake anywhere in a long history: false, after reading every page', async () => {
+    const c = chain(250)
+    expect(await everStaked(c.page, ME)).toBe(false)
+    expect(c.pages.length).toBe(3)
+  })
+  it('a history longer than the page budget is treated as "has staked" (not a new staker)', async () => {
+    expect(await everStaked(chain(1000).page, ME, 5)).toBe(true)
+  })
+})

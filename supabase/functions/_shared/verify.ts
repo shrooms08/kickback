@@ -19,3 +19,20 @@ export function checkTx(tx: ChainTx | null | undefined, e: TxExpect): boolean {
   if (e.value != null && tx.value !== e.value) return false
   return true
 }
+
+/**
+ * Has this address ever staked? Reads its whole history, newest first, 100 a page: a tx from it to
+ * the staking contract (stake, add stake) or from the contract to it (unstaked funds paid out).
+ * A history longer than maxPages pages is taken as "has staked" (it is not a new wallet).
+ */
+export async function everStaked(page: (startAt: string | null) => Promise<ChainTx[]>, address: string, maxPages = 20): Promise<boolean> {
+  const me = norm(address), contract = norm(STAKING_CONTRACT)
+  let startAt: string | null = null
+  for (let i = 0; i < maxPages; i++) {
+    const list = await page(startAt)
+    if (list.some(t => (norm(t.from) === me && norm(t.to) === contract) || (norm(t.from) === contract && norm(t.to) === me))) return true
+    if (list.length < 100) return false
+    startAt = list[list.length - 1].hash
+  }
+  return true
+}

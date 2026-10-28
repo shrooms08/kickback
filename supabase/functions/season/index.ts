@@ -14,7 +14,7 @@ import { verifyShare } from '../_shared/proofs.ts'
 import type { ShareRow } from '../_shared/proofs.ts'
 import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, streak } from '../_shared/season.ts'
 import type { Skin } from '../_shared/season.ts'
-import { STAKING_CONTRACT } from '../_shared/verify.ts'
+import { STAKING_CONTRACT, everStaked } from '../_shared/verify.ts'
 import { TIERS, XP, seasonOf, tierInfo } from '../_shared/xp.ts'
 import { awardFromData, seasonXp, snapshotStake } from '../_shared/xpAward.ts'
 
@@ -195,13 +195,19 @@ async function post(s: Session, body: any) {
     const owner = must(await db.from('invite_codes').select('address').eq('network', s.network).eq('code', code).maybeSingle()) as { address: string } | null
     if (!owner) return { status: 400, body: { error: 'no such invite code' } }
     if (norm(owner.address) === norm(s.address)) return { status: 400, body: { error: 'that is your own invite code' } }
-    // "Had a stake" = staked now, or ever sent a stake (an unstaked old staker doesn't count as new).
-    let had: boolean
-    try {
-      const rpc = rpcFor(s.network)
-      had = hasStake(await getStaker(rpc, s.address)) || (await txPage(rpc, s.address, null)).some(t => norm(t.from) === norm(s.address) && norm(t.to) === norm(STAKING_CONTRACT))
+    // "Had a stake" = the server ever saw one (a stake snapshot, the scan's staked flag, a verified
+    // stake), staked now, or anywhere in its whole history (an unstaked old staker isn't new).
+    const own = (table: string) => db.from(table).select('address', { count: 'exact', head: true }).eq('address', s.address).eq('network', s.network)
+    const [snapR, scanR, evR] = await Promise.all([own('stake_snapshots').gt('active_luna', 0), own('chain_scan').eq('staked', true), own('events').eq('verified', true)])
+    for (const r of [snapR, scanR, evR]) if (r.error) throw r.error
+    let had = !!(snapR.count || scanR.count || evR.count)
+    if (!had) {
+      try {
+        const rpc = rpcFor(s.network)
+        had = hasStake(await getStaker(rpc, s.address)) || await everStaked(startAt => txPage(rpc, s.address, startAt), s.address)
+      }
+      catch { return { status: 503, body: { error: 'could not check the chain, try again' } } }
     }
-    catch { return { status: 503, body: { error: 'could not check the chain, try again' } } }
     const { error } = await db.from('referrals').insert({ invitee: s.address, network: s.network, inviter: owner.address, code, had_stake_at_claim: had })
     if (error) {
       if (error.code === '23505') return { status: 409, body: { error: 'this wallet already has an inviter' } }

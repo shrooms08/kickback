@@ -90,3 +90,39 @@ describe('season clock', () => {
     expect(seasonOf(Date.UTC(2026, 11, 7, 1)).id).toBe(2)
   })
 })
+
+import { INVITE_KEEP_DAYS, inviteStakeKept } from '../supabase/functions/_shared/xp'
+describe('invite XP: the invitee keeps a real stake for 7 days after the claim (audit 11)', () => {
+  const D = 864e5, MIN = 1_000_000
+  const claimed = Date.parse('2026-10-10T15:00:00Z')
+  // Snapshots for the 7 days after the claim day (Oct 11..17), 10 NIM each.
+  const week = (luna = MIN) => Array.from({ length: 7 }, (_, i) => ({ day: utcDay(claimed + (i + 1) * D), active_luna: luna }))
+  const at = (t: number, snaps: Array<{ day: string, active_luna: number }>) => inviteStakeKept(claimed, t, snaps, MIN)
+  it('is a week', () => expect(INVITE_KEEP_DAYS).toBe(7))
+  it('waits until 7 days have passed, however much was staked before', () => {
+    expect(at(claimed + 3 * D, week().slice(0, 3))).toBe('wait')
+    expect(at(claimed + 7 * D - 1, week())).toBe('wait')
+  })
+  it('counts once the 7 days after the claim all held 10+ NIM and the stake is still there today', () => {
+    expect(at(claimed + 7 * D, week())).toBe('yes')
+    expect(at(claimed + 9 * D, [...week(), { day: utcDay(claimed + 9 * D), active_luna: MIN }])).toBe('yes')
+  })
+  it('needs today\'s stake: none (yet) or below 10 NIM today waits', () => {
+    expect(at(claimed + 9 * D, week())).toBe('wait')
+    expect(at(claimed + 9 * D, [...week(), { day: utcDay(claimed + 9 * D), active_luna: MIN - 1 }])).toBe('wait')
+  })
+  it('never counts when a day of the week dropped below 10 NIM', () => {
+    const w = week(); w[3] = { ...w[3], active_luna: 5 }
+    expect(at(claimed + 8 * D, [...w, { day: utcDay(claimed + 8 * D), active_luna: MIN }])).toBe('never')
+  })
+  it('stake before or on the claim day does not count towards the week', () => {
+    const before = Array.from({ length: 7 }, (_, i) => ({ day: utcDay(claimed - i * D), active_luna: MIN }))
+    expect(at(claimed + 8 * D, [...before, { day: utcDay(claimed + 8 * D), active_luna: MIN }])).toBe('never')
+  })
+  it('tolerates one day without a snapshot (cron outage), not two', () => {
+    const one = week().filter((_, i) => i !== 2), two = week().filter((_, i) => i !== 2 && i !== 4)
+    const today = { day: utcDay(claimed + 8 * D), active_luna: MIN }
+    expect(at(claimed + 8 * D, [...one, today])).toBe('yes')
+    expect(at(claimed + 8 * D, [...two, today])).toBe('never')
+  })
+})
