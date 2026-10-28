@@ -149,6 +149,22 @@ end $$;`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
 log('ledger: a second stake row for the same day is refused', !dupOut.includes('ACCEPTED'))
 log('ledger: the same run can never earn twice (proof unique)', !proofOut.includes('ACCEPTED'))
 
+// Audit 8: the season returns this wallet's kickbacks since its plan started (newest first), so the
+// app can keep ones older than its own 30-day window.
+const kw = await signIn()
+const k1 = hex(randomBytes(32)), k2 = hex(randomBytes(32)), kOld = hex(randomBytes(32))
+const kNoPlan = await season(kw.token)
+log('no plan: no kickbacks returned', Array.isArray(kNoPlan.data.kickbacks) && kNoPlan.data.kickbacks.length === 0, JSON.stringify(kNoPlan.data.kickbacks))
+sql(`insert into public.plans (address, network, slices, plan_started_at) values ('${kw.address}', 'testnet', '[{"type":"keep","percent":100,"contact_id":null}]', now() - interval '40 days');
+insert into public.kickbacks_seen (address, network, hash, at, luna, from_address) values
+  ('${kw.address}', 'testnet', '${k1}', now() - interval '35 days', 300000, 'NQ00 POOL'),
+  ('${kw.address}', 'testnet', '${k2}', now() - interval '1 day', 120000, 'NQ00 POOL'),
+  ('${kw.address}', 'testnet', '${kOld}', now() - interval '41 days', 50000, 'NQ00 POOL');`)
+unthrottle(kw.address)
+const kRes = (await season(kw.token)).data.kickbacks
+log('kickbacks since the plan started come back newest first, older than 30 days included', JSON.stringify(kRes?.map(k => k.hash)) === JSON.stringify([k2, k1]) && kRes[0].luna === 120000 && typeof kRes[0].at === 'number' && Math.abs(kRes[1].at - (Date.now() - 35 * 864e5)) < 600e3, JSON.stringify(kRes))
+log('a kickback from before the plan started is left out', !kRes?.some(k => k.hash === kOld))
+
 // xp-cron (audit 10): only wallets with a plan or an active stake, from a persistent cursor.
 // Every other local testnet wallet gets today's snapshot first, so the run only looks at these four.
 const withPlan = await signIn(), withStake = await signIn(), idle = await signIn(), invitee = await signIn()

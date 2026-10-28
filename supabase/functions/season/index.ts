@@ -1,5 +1,6 @@
 // season: Season 1 for the signed-in wallet, computed here from verified data only.
-//   GET                -> { season, code, milestones, unlocked, skin, streak, invites, chainOk }
+//   GET                -> { season, code, milestones, unlocked, skin, streak, invites, kickbacks, chainOk }
+//                         kickbacks: [{ hash, at (ms), luna }] since the plan started, newest first (max 2000)
 //   POST { skin }      -> apply an unlocked Stack skin
 //   POST { ref }       -> claim an invite code (once per wallet; not your own)
 // Milestones come from the chain (stake, kickbacks from a direct pool's reward address) and from
@@ -120,6 +121,10 @@ async function getSeason(s: Session) {
   const user = must(userR) as { skin: Skin } | null
   const invites = must(await db.from('referrals').select('credited_at').eq('network', s.network).eq('inviter', s.address)) as Array<{ credited_at: string | null }>
   const plan = must(await db.from('plans').select('plan_started_at, first_seen_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null, first_seen_at: string } | null
+  // The kickbacks since the plan started, for the app's Ready to share (it keeps only 30 days itself).
+  const sincePlan = plan?.plan_started_at
+    ? must(await db.from('kickbacks_seen').select('hash, at, luna').eq('address', s.address).eq('network', s.network).gte('at', plan.plan_started_at).order('at', { ascending: false }).limit(2000)) as Array<{ hash: string, at: string, luna: number }>
+    : []
   // Shares count only after the plan started, and a run only when a kickback landed since the last
   // counted run: random transfers to a contact, or many tiny runs, don't add up to anything.
   const since = plan?.plan_started_at ? Math.max(Date.parse(plan.plan_started_at), Date.parse(plan.first_seen_at)) : Infinity
@@ -172,6 +177,7 @@ async function getSeason(s: Session) {
     streak: st,
     facts: { runs: facts.runs, sharedLuna: facts.sharedLuna, kickbacks: facts.kickbacks },
     invites: { claimed: invites.length, staked: facts.invitedStakers },
+    kickbacks: sincePlan.map(k => ({ hash: k.hash, at: Date.parse(k.at), luna: Number(k.luna) })),
     chainOk,
   }
 }
