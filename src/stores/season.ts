@@ -16,8 +16,15 @@ export type Skin = 'spark' | 'kick' | 'bounce' | 'rally' | 'surge' | 'legend'
 export type MilestoneKey = 'first_stake' | 'first_kickback' | 'first_share' | 'ten_runs' | 'hundred_shared' | 'streak_30' | 'invited_staker'
 export type StreakDot = 'ok' | 'saved' | 'missed' | 'pending'
 
+export interface TierInfo { i: number, name: string, skin: Skin, sub: 0 | 1 | 2, roman: string, next: string | null, toNext: number, floor: number }
+export interface Quest { key: 'run3' | 'add' | 'keep', p: number, n: number, done: boolean }
 export interface SeasonData {
-  season: { id: number, name: string, endsAt: string }
+  season: { id: number, name: string, endsAt: string | null, ended?: boolean, nextStartsAt?: string | null }
+  /** Stage B: XP this season, tier, ladder, weekly quests. Absent from an older server. */
+  xp?: number
+  tier?: TierInfo
+  tiers?: Array<{ name: string, at: number, skin: Skin }>
+  quests?: Quest[]
   code: string
   milestones: Array<{ key: MilestoneKey, unlocked_at: string }>
   unlocked: Skin[]
@@ -29,13 +36,22 @@ export interface SeasonData {
   chainOk: boolean
 }
 
-export const SKIN_LIST: Array<{ k: Skin, name: string, note: string, from: string }> = [
-  { k: 'spark', name: 'Spark', note: 'Diagonal hatch', from: 'Everyone' },
-  { k: 'kick', name: 'Kick', note: 'Cross-hatch', from: 'First stake' },
-  { k: 'bounce', name: 'Bounce', note: 'Stippled dots', from: 'First kickback' },
-  { k: 'rally', name: 'Rally', note: 'Wavy lines', from: 'First share' },
-  { k: 'surge', name: 'Surge', note: 'Zigzag', from: '10 plan runs' },
-  { k: 'legend', name: 'Legend', note: 'Confetti + glow', from: '100 NIM shared or a 30-day streak' },
+/** One skin per tier (Stage B). Skins unlocked earlier through milestones stay unlocked. */
+export const SKIN_LIST: Array<{ k: Skin, name: string, note: string, from: string, at: number }> = [
+  { k: 'spark', name: 'Spark', note: 'Diagonal hatch', from: 'Everyone', at: 0 },
+  { k: 'kick', name: 'Kick', note: 'Cross-hatch', from: 'Reach Kick · 1,000 XP', at: 1000 },
+  { k: 'bounce', name: 'Bounce', note: 'Stippled dots', from: 'Reach Bounce · 3,000 XP', at: 3000 },
+  { k: 'rally', name: 'Rally', note: 'Wavy lines', from: 'Reach Rally · 8,000 XP', at: 8000 },
+  { k: 'surge', name: 'Surge', note: 'Zigzag', from: 'Reach Surge · 20,000 XP', at: 20000 },
+  { k: 'legend', name: 'Legend', note: 'Confetti + glow', from: 'Reach Legend · 50,000 XP', at: 50000 },
+]
+export const QUEST_TITLES: Record<Quest['key'], string> = { run3: 'Run your plan 3 times', add: 'Add someone to your plan', keep: 'Keep your stake all week' }
+export const XP_WAYS: Array<[string, string]> = [
+  ['Keep NIM staked', 'up to 2,000 XP a day (50 × √ staked NIM)'],
+  ['Run your plan', '+200 XP a run, 2 a day'],
+  ['Share with someone', '+100 XP a run with a send, 2 a day'],
+  ['Friend\'s first stake', '+500 XP'],
+  ['Weekly quest', '+300 XP each'],
 ]
 
 export const MILESTONE_LIST: Array<{ k: MilestoneKey, label: string, icon: string }> = [
@@ -48,7 +64,7 @@ export const MILESTONE_LIST: Array<{ k: MilestoneKey, label: string, icon: strin
   { k: 'invited_staker', label: 'Invited a friend who staked', icon: 'user' },
 ]
 
-export const COSMETIC_NOTE = 'Cosmetic only. Milestones and skins are not money and never become tokens.'
+export const COSMETIC_NOTE = 'Cosmetic only. Milestones and skins are not money and never become tokens. Neither is XP: it resets each season, and your unlocks stay.'
 export const SEASON_END = '2026-11-30T23:59:59Z'
 
 /** Prototype numbers for ?mock=1 (dev only). */
@@ -57,6 +73,10 @@ const MOCK: SeasonData = {
   code: 'KICK-7Q2M',
   milestones: [{ key: 'first_stake', unlocked_at: '' }, { key: 'first_kickback', unlocked_at: '' }, { key: 'first_share', unlocked_at: '' }],
   unlocked: ['spark', 'kick', 'bounce', 'rally'],
+  xp: 2340,
+  tier: { i: 1, name: 'Kick', skin: 'kick', sub: 2, roman: 'III', next: 'Bounce', toNext: 660, floor: 1000 },
+  tiers: [{ name: 'Spark', at: 0, skin: 'spark' }, { name: 'Kick', at: 1000, skin: 'kick' }, { name: 'Bounce', at: 3000, skin: 'bounce' }, { name: 'Rally', at: 8000, skin: 'rally' }, { name: 'Surge', at: 20000, skin: 'surge' }, { name: 'Legend', at: 50000, skin: 'legend' }],
+  quests: [{ key: 'run3', p: 1, n: 3, done: false }, { key: 'add', p: 0, n: 1, done: false }, { key: 'keep', p: 4, n: 7, done: false }],
   skin: 'spark',
   streak: { current: 12, best: 18, savers: 1, pending: 0, hist: ['ok', 'missed', 'ok', 'ok', 'saved', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok'] },
   facts: { runs: 7, sharedLuna: 4_210_000, kickbacks: 14 },
@@ -86,6 +106,8 @@ export const useSeason = defineStore('season', {
     skin: 'spark' as Skin,
     /** A skin unlocked since the last visit: shows the "New skin unlocked" moment. */
     celebrate: null as Skin | null,
+    /** Set with celebrate when it came from reaching a new tier: "You reached Kick". */
+    celebrateTier: null as string | null,
     /** Bumped when a run completes: the Home streak pill ticks. */
     tick: 0,
     lastLoadAt: 0,
@@ -152,7 +174,13 @@ export const useSeason = defineStore('season', {
       const seen = new Set<string>(seenRaw ? JSON.parse(seenRaw) : d.unlocked)
       const fresh = d.unlocked.filter(k => k !== 'spark' && !seen.has(k))
       prefSet(key(this.address, 'seen'), JSON.stringify(d.unlocked))
-      if (fresh.length) this.celebrate = fresh[fresh.length - 1]
+      // Tier-up: the tier index rose since this phone last saw it (the first load only records).
+      const lastTier = prefGet(key(this.address, 'tier'))
+      const ti = d.tier?.i ?? 0
+      prefSet(key(this.address, 'tier'), String(ti))
+      const tierUp = lastTier != null && ti > Number(lastTier) ? d.tier!.name : null
+      if (tierUp) { this.celebrateTier = tierUp; this.celebrate = d.tier!.skin }
+      else if (fresh.length) { this.celebrateTier = null; this.celebrate = fresh[fresh.length - 1] }
     },
     useSkin(k: Skin) {
       this.skin = k

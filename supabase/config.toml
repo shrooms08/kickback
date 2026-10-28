@@ -434,3 +434,6 @@ verify_jwt = false
 
 [functions.rpc-proxy]
 verify_jwt = false
+
+[functions.xp-cron]
+verify_jwt = false

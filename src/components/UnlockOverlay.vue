@@ -6,8 +6,8 @@ import { SKIN_LIST, useSeason } from '../stores/season'
 // "New skin unlocked": a K burst, the new skin sweeping across a mini Stack, Apply skin / Later.
 const season = useSeason()
 const s = computed(() => SKIN_LIST.find(x => x.k === season.celebrate) ?? null)
-function apply() { if (s.value) void season.applySkin(s.value.k); season.celebrate = null }
-function later() { season.celebrate = null }
+function apply() { if (s.value) void season.applySkin(s.value.k); season.celebrate = null; season.celebrateTier = null }
+function later() { season.celebrate = null; season.celebrateTier = null }
 </script>
 
 <template>
@@ -17,9 +17,9 @@ function later() { season.celebrate = null }
       <div class="coin"><KLogo :size="44" color="var(--kb-bg)" animate /></div>
     </div>
     <div class="copy">
-      <div class="kb-eyebrow">New skin unlocked</div>
+      <div class="kb-eyebrow">{{ season.celebrateTier ? `You reached ${season.celebrateTier}` : 'New skin unlocked' }}</div>
       <h2 class="title">{{ s.name }}</h2>
-      <p class="lead">{{ s.note }} for your Stack. Unlocked by: {{ s.from }}.</p>
+      <p class="lead">{{ season.celebrateTier ? `You reached ${season.celebrateTier}. New skin unlocked: ${s.note.toLowerCase()} for your Stack.` : `${s.note} for your Stack. Unlocked by: ${s.from}.` }}</p>
     </div>
     <div class="stack" :class="{ legend: s.k === 'legend' }">
       <div v-for="(ink, i) in ['dark', 'second', 'light']" :key="ink" class="w" :style="{ transform: `translateY(${i * 36}px)`, zIndex: 3 - i }">

@@ -12,14 +12,15 @@ import type { Session } from '../_shared/session.ts'
 import { getStaker, hasStake, rpcFor, txPage } from '../_shared/chain.ts'
 import { verifyShare } from '../_shared/proofs.ts'
 import type { ShareRow } from '../_shared/proofs.ts'
-import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, skinsFrom, streak } from '../_shared/season.ts'
+import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, streak } from '../_shared/season.ts'
 import type { Skin } from '../_shared/season.ts'
 import { STAKING_CONTRACT } from '../_shared/verify.ts'
+import { TIERS, XP, seasonOf, tierInfo } from '../_shared/xp.ts'
+import { awardFromData, seasonXp, snapshotStake } from '../_shared/xpAward.ts'
 
 const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
 
-export const SEASON = { id: 1, name: 'Season 1', endsAt: '2026-11-30T23:59:59Z' }
 const norm = (a: string) => String(a || '').replace(/\s+/g, '').toUpperCase()
 // deno-lint-ignore no-explicit-any
 const must = (r: { data: unknown, error: unknown }): any => { if (r.error) throw r.error; return r.data }
@@ -97,6 +98,9 @@ async function recheckShares(s: Session) {
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
+const cachedQuests = new Map<string, { quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>()
+const key = (s: Session) => `${s.network}:${s.address}`
+
 async function getSeason(s: Session) {
   const code = await codeFor(s)
   const scanned = must(await db.from('chain_scan').select('scanned_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { scanned_at: string } | null
@@ -115,10 +119,10 @@ async function getSeason(s: Session) {
   const shares = must(sharesR) as Array<{ id: string, run_id: string | null, slice_type: string, amount_luna: number, block_at: string }>
   const user = must(userR) as { skin: Skin } | null
   const invites = must(await db.from('referrals').select('credited_at').eq('network', s.network).eq('inviter', s.address)) as Array<{ credited_at: string | null }>
-  const plan = must(await db.from('plans').select('plan_started_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null } | null
+  const plan = must(await db.from('plans').select('plan_started_at, first_seen_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null, first_seen_at: string } | null
   // Shares count only after the plan started, and a run only when a kickback landed since the last
   // counted run: random transfers to a contact, or many tiny runs, don't add up to anything.
-  const since = plan?.plan_started_at ? Date.parse(plan.plan_started_at) : Infinity
+  const since = plan?.plan_started_at ? Math.max(Date.parse(plan.plan_started_at), Date.parse(plan.first_seen_at)) : Infinity
   const kickTimes = kicks.map(k => Date.parse(k.at))
   const runAt = new Map<string, number>()
   for (const sh of shares) { const k = sh.run_id ?? sh.id, t = Date.parse(sh.block_at); if (t >= since) runAt.set(k, Math.min(runAt.get(k) ?? Infinity, t)) }
@@ -140,11 +144,26 @@ async function getSeason(s: Session) {
   const reached = milestonesFrom(facts)
   if (reached.length) must(await db.from('milestones').upsert(reached.map(key => ({ address: s.address, network: s.network, key })), { onConflict: 'address,network,key', ignoreDuplicates: true }))
   const stored = must(await db.from('milestones').select('key, unlocked_at').eq('address', s.address).eq('network', s.network)) as Array<{ key: string, unlocked_at: string }>
-  const skins = skinsFrom(stored.map(m => m.key))
-  must(await db.from('unlocks').upsert(skins.map(skin => ({ address: s.address, network: s.network, skin, source: skin === 'spark' ? 'default' : 'milestone' })), { onConflict: 'address,network,skin', ignoreDuplicates: true }))
+
+  // Season XP (Stage B): today's stake if the cron hasn't reached this wallet, then runs, shares,
+  // invites and quests from verified data. Skins now unlock by tier; Stage A milestone unlocks stay.
+  const season = seasonOf()
+  // Award work runs at most once a minute per wallet; in between, quests are read from the last run.
+  if (!fresh) await snapshotStake(s.address, s.network).catch(() => null)
+  const { quests } = fresh && cachedQuests.has(key(s)) ? cachedQuests.get(key(s))! : await awardFromData(s.address, s.network)
+  cachedQuests.set(key(s), { quests })
+  const xp = await seasonXp(s.address, s.network, season.id)
+  const tier = tierInfo(xp)
+  const tierSkins = TIERS.slice(0, tier.i + 1).map(t => t.skin)
+  must(await db.from('unlocks').upsert(tierSkins.map(skin => ({ address: s.address, network: s.network, skin, source: skin === 'spark' ? 'default' : 'tier' })), { onConflict: 'address,network,skin', ignoreDuplicates: true }))
   const unlocks = must(await db.from('unlocks').select('skin, unlocked_at').eq('address', s.address).eq('network', s.network)) as Array<{ skin: Skin, unlocked_at: string }>
   return {
-    season: SEASON,
+    season: { id: season.id, name: `Season ${season.id}`, endsAt: season.endsAt, ended: season.ended, nextStartsAt: season.nextStartsAt },
+    xp,
+    tier,
+    tiers: TIERS.map(t => ({ name: t.name, at: t.at, skin: t.skin })),
+    quests,
+    xpWays: { stake: 'min(2000, 50 × √staked NIM) a day', run: XP.run, share: XP.share, invite: XP.invite, quest: XP.quest },
     code,
     milestones: stored,
     unlocked: SKINS.filter(k => unlocks.some(u => u.skin === k)),

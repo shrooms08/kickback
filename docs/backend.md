@@ -37,6 +37,14 @@ Supabase is the source of truth for plans, contacts and processed shares. localS
 | `events` | address (null when not signed in), network, kind, amount_luna (bigint), created_at | functions only |
 | `auth_nonces` | nonce, address, network, created_at, used_at | functions only |
 | `pool_probes` | known stakers per pool reward address (for cheap payout reads) | functions only |
+| `invite_codes` | address, network, code (`KICK-XXXX`, unique) | functions only |
+| `referrals` | invitee (one inviter per wallet per network), inviter, code, claimed_at, had_stake_at_claim, credited_at | functions only |
+| `kickbacks_seen` | payouts from a direct pool's reward address to the wallet, found on chain | functions only |
+| `chain_scan` | where the last history scan stopped, staked flag, scanned_at (1 chain read a minute per wallet) | functions only |
+| `milestones` | address, network, key, unlocked_at (only ever added) | functions only |
+| `unlocks` | Stack skins unlocked (source: default, milestone, tier), only ever added | functions only |
+| `xp_ledger` | Season XP rows: source (stake, run, share, invite, quest), ref, proof, amount; unique per (wallet, season, source, ref) and per (wallet, source, proof) | functions only |
+| `stake_snapshots` | each signed-in wallet's active stake once per UTC day | functions only |
 
 RLS is on for every table. The only policy is `select` on `pool_stats` for anon/authenticated, and all default grants to anon/authenticated are revoked except that select. `e2e/rls-check.mjs` proves it with the anon key: every private read and every write gets `42501 permission denied` (20/20). `supabase db advisors`: no issues.
 
@@ -50,7 +58,9 @@ All deployed with `verify_jwt = false`: they check Kickback's own session token.
 | `auth-verify` | POST `{ address, network, nonce, publicKey, signature }` → `{ token, expiresAt }` |
 | `sync` | GET → plan, contacts, shares. PUT `{ contacts?, plan? }` (contacts = the full list). POST `{ share }` (session required) or `{ event, network }` (address only with a session). Validates: slices total 100 with one slice per type, whole percents, a send slice names one of your contacts; contact addresses pass the Nimiq checksum and aren't your own; Luna amounts are positive safe integers; share ids are uuids, send/restake need a hash. |
 | `pool-stats-cron` | POST `?network=mainnet|testnet`, only with the cron secret. See below. |
-| `stats` | GET, public: totals per network for the last 7 days and all time, no addresses. https://dhjcilstkumeglweddev.supabase.co/functions/v1/stats |
+| `stats` | GET, public: totals per network for the last 7 days and all time, no addresses. Only signed-in wallets, verified stakes, and runs/shares whose tx was found on chain after the plan started. https://dhjcilstkumeglweddev.supabase.co/functions/v1/stats |
+| `season` | GET (session): Season state from verified data only: invite code, streak, milestones, unlocked skins, XP, tier, weekly quests. POST `{ skin }` (an unlocked one), POST `{ ref }` (claim an invite code once). |
+| `xp-cron` | POST `?network=…`, only with the cron secret: snapshots every signed-in wallet's active stake and awards daily stake XP. |
 
 Secrets: `SESSION_SECRET` (set with `supabase secrets set`), plus `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` provided by Supabase. The service role key never leaves Supabase. CORS allows `https://kickback-ecru.vercel.app`, `https://kickback-*.vercel.app` and localhost (`ALLOWED_ORIGINS` adds more).
 
@@ -61,6 +71,8 @@ Secrets: `SESSION_SECRET` (set with `supabase secrets set`), plus `SUPABASE_URL`
 | `kickback-pool-stats-mainnet` | `*/15 * * * *` | pool-stats-cron?network=mainnet |
 | `kickback-pool-stats-testnet` | `7,22,37,52 * * * *` | pool-stats-cron?network=testnet |
 | `kickback-nonce-cleanup` | `30 3 * * *` | deletes nonces older than a day |
+| `kickback-xp-daily-mainnet` | `10 0 * * *` | xp-cron?network=mainnet |
+| `kickback-xp-daily-testnet` | `25 0 * * *` | xp-cron?network=testnet |
 
 The cron secret is generated inside the database (Vault, `kickback_cron_secret`) and never leaves it: pg_cron sends it as `X-Cron-Secret`, the function checks it with `cron_secret_ok()` (service role only).
 
@@ -77,7 +89,19 @@ The RPC client keeps under the public node's limit (14 of 20 units per 10 s) and
 - **Diagnostics:** backend, signed in, token expiry, last sync, queued writes, pool list source, Sign in / Sign out.
 - Mainnet and testnet never mix: network column everywhere, separate sessions and local caches.
 
+## Season (verification rules)
+
+- **Shares count only when verified on chain:** the tx exists, executed, in a block, sent by the signed-in wallet, to a saved contact (send) or the staking contract (restake), for exactly the claimed amount. One tx proves one share (unique index); a verified stake tx can't also be a share. Editing a share's tx, amount or type clears its proof (trigger). The verify update only applies to the row exactly as checked.
+- **Runs:** shares grouped by `run_id`, after `plan_started_at`, and a run counts only when a kickback (payout from a direct pool in `pool_stats`) landed since the last counted run. Shared NIM for milestones is capped at the kickbacks that landed.
+- **Streak:** a kickback is shared on time when a counted run lands within 24h; one saver per ISO week (Monday 00:00 UTC); kickbacks before the plan started are ignored.
+- **Invites:** one inviter per wallet; not your own code; it counts once the invitee stakes and had never staked before claiming (current stake and stake history checked).
+- **XP:** see `supabase/functions/_shared/xp.ts` (amounts, caps, tiers, quests, season clock) and `xpAward.ts` (awards). XP resets per season; unlocks stay.
+- Unverified shares are rechecked at most 10 times within 48h, at most 50 waiting per wallet. Function RPC calls time out after 8 s and don't sleep on 429: the stored state is returned with `chainOk: false`.
+
 ## Deploying changes
+
+**Order matters:** migrations first, then functions, then the app (the new functions read the new columns; old functions ignore them).
+
 
 ```bash
 SUPABASE_DB_PASSWORD="$(cat ~/.kickback-supabase-db.pass)" supabase db push --linked   # migrations
@@ -91,5 +115,8 @@ The database password is in `~/.kickback-supabase-db.pass` (mode 600, outside th
 - `tests/backend.test.ts`: signature verification (known-good, tampered message, flipped signature byte, wrong key, short signature, and an address vector computed with `@nimiq/core`), app/server sign-in message match, session tokens (forged, tampered, expired), slice / contact / share / event validation, Luna maths and payout timing.
 - `e2e/signin-sync.mjs`: the fake Nimiq Pay signs with a generated Ed25519 key like the host does; sign in, save a plan, clear localStorage, reload, sign in again, the plan comes back; a rejected signature leaves the app local-only with the banner; the pool list comes from pool_stats on both networks.
 - `e2e/rls-check.mjs`: the anon key can't read private tables or write anything.
+- `tests/season.test.ts`, `tests/xp.test.ts`: streak, milestones, skins, invite codes, tx checks, counted runs, XP formula, caps, tiers, quests, season clock.
+- `e2e/season-api.mjs`, `e2e/xp-api.mjs` (local stack): spoofed shares and stakes unlock nothing, invites rules, skins, public stats; daily stake XP once, run caps, quests, ledger uniqueness, xp-cron secret.
+- `supabase/tests/season_guards.sql` (local stack): proof reset trigger, one verified share per tx, lower-case hashes.
 - `tests/plansync.test.ts`, `e2e/sync-api.mjs`, `e2e/plan-roundtrip.mjs`: plans round-trip exactly (unit, Edge Function, and on screen through Sign out / Sign in / cleared storage, checked against the database row); invalid plans are rejected, not repaired.
 - `supabase/snippets/2026-10-21-broken-send-plans.sql`: finds plans the old bug stored (send 0%, no contact).
