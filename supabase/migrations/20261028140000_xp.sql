@@ -58,3 +58,19 @@ select cron.schedule('kickback-xp-daily-testnet', '25 0 * * *', $$
     timeout_milliseconds := 140000
   ) as request_id;
 $$);
+
+-- When the server first saw this wallet's plan. The app sets plan_started_at itself (it can be
+-- any past time), so Season rewards also require shares after first_seen_at, which never moves.
+alter table public.plans add column first_seen_at timestamptz not null default now();
+create or replace function public.kickback_plans_keep_first_seen()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.first_seen_at := old.first_seen_at;
+  return new;
+end
+$$;
+create trigger plans_keep_first_seen before update on public.plans
+  for each row execute function public.kickback_plans_keep_first_seen();

@@ -98,6 +98,9 @@ async function recheckShares(s: Session) {
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
+const cachedQuests = new Map<string, { quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>()
+const key = (s: Session) => `${s.network}:${s.address}`
+
 async function getSeason(s: Session) {
   const code = await codeFor(s)
   const scanned = must(await db.from('chain_scan').select('scanned_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { scanned_at: string } | null
@@ -116,10 +119,10 @@ async function getSeason(s: Session) {
   const shares = must(sharesR) as Array<{ id: string, run_id: string | null, slice_type: string, amount_luna: number, block_at: string }>
   const user = must(userR) as { skin: Skin } | null
   const invites = must(await db.from('referrals').select('credited_at').eq('network', s.network).eq('inviter', s.address)) as Array<{ credited_at: string | null }>
-  const plan = must(await db.from('plans').select('plan_started_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null } | null
+  const plan = must(await db.from('plans').select('plan_started_at, first_seen_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null, first_seen_at: string } | null
   // Shares count only after the plan started, and a run only when a kickback landed since the last
   // counted run: random transfers to a contact, or many tiny runs, don't add up to anything.
-  const since = plan?.plan_started_at ? Date.parse(plan.plan_started_at) : Infinity
+  const since = plan?.plan_started_at ? Math.max(Date.parse(plan.plan_started_at), Date.parse(plan.first_seen_at)) : Infinity
   const kickTimes = kicks.map(k => Date.parse(k.at))
   const runAt = new Map<string, number>()
   for (const sh of shares) { const k = sh.run_id ?? sh.id, t = Date.parse(sh.block_at); if (t >= since) runAt.set(k, Math.min(runAt.get(k) ?? Infinity, t)) }
@@ -145,8 +148,10 @@ async function getSeason(s: Session) {
   // Season XP (Stage B): today's stake if the cron hasn't reached this wallet, then runs, shares,
   // invites and quests from verified data. Skins now unlock by tier; Stage A milestone unlocks stay.
   const season = seasonOf()
+  // Award work runs at most once a minute per wallet; in between, quests are read from the last run.
   if (!fresh) await snapshotStake(s.address, s.network).catch(() => null)
-  const { quests } = await awardFromData(s.address, s.network)
+  const { quests } = fresh && cachedQuests.has(key(s)) ? cachedQuests.get(key(s))! : await awardFromData(s.address, s.network)
+  cachedQuests.set(key(s), { quests })
   const xp = await seasonXp(s.address, s.network, season.id)
   const tier = tierInfo(xp)
   const tierSkins = TIERS.slice(0, tier.i + 1).map(t => t.skin)

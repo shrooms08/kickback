@@ -58,7 +58,7 @@ const day0 = Date.now() - 3 * 3600e3
 const iso = ms => new Date(ms).toISOString()
 const cid = 'c1'
 let q = `insert into public.contacts (id, address, network, name, contact_address) values ('${cid}', '${a.address}', 'testnet', 'Ada', 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8') on conflict do nothing;
-insert into public.plans (address, network, slices, plan_started_at) values ('${a.address}', 'testnet', '[{"type":"send","percent":50,"contact_id":"${cid}"},{"type":"restake","percent":50,"contact_id":null}]', '${iso(day0 - 3600e3)}') on conflict (address, network) do update set plan_started_at = excluded.plan_started_at;\n`
+insert into public.plans (address, network, slices, plan_started_at, first_seen_at) values ('${a.address}', 'testnet', '[{"type":"send","percent":50,"contact_id":"${cid}"},{"type":"restake","percent":50,"contact_id":null}]', '${iso(day0 - 3600e3)}', '${iso(day0 - 3600e3)}') on conflict (address, network) do update set plan_started_at = excluded.plan_started_at;\n`
 for (let i = 0; i < 3; i++) {
   const k = day0 + i * 40 * 60e3, r = k + 10 * 60e3, run = randomUUID()
   q += `insert into public.kickbacks_seen (address, network, hash, at, luna, from_address) values ('${a.address}', 'testnet', '${hex(randomBytes(32))}', '${iso(k)}', 300000, 'NQ00 POOL');
@@ -79,6 +79,37 @@ log('reaching Bounce unlocks the Kick and Bounce skins (not Rally)', s3.data.unl
 unthrottle(a.address)
 const s4 = await season(a.token)
 log('reading again awards nothing twice', s4.data.xp === 3200, `xp ${s4.data.xp}`)
+
+// M2: a verified share can't be moved to another run (relabelling the same txs would earn again).
+const vs = sql(`select id, amount_luna, tx_hash from public.shares where address = '${a.address}' and verified and slice_type = 'send' limit 1;`).split('|')
+const relabel = await call('sync', { token: a.token, body: { share: { id: vs[0], amount_luna: Number(vs[1]), slice_type: 'send', tx_hash: vs[2], run_id: randomUUID() } } })
+log('a verified share cannot be moved to another run', relabel.status === 409, `HTTP ${relabel.status}`)
+const undo = await call('sync', { token: a.token, body: { share: { id: vs[0], amount_luna: Number(vs[1]), slice_type: 'send', tx_hash: vs[2], status: 'undone' } } })
+log('a verified share cannot be toggled to undone and back', undo.status === 409, `HTTP ${undo.status}`)
+
+// M1: invite XP needs the invitee to keep a real stake (3 snapshots of 10+ NIM this season).
+const inv = await signIn()
+sql(`insert into public.referrals (invitee, network, inviter, code, had_stake_at_claim, credited_at) values ('${inv.address}', 'testnet', '${a.address}', 'KICK-TEST', false, now());`)
+unthrottle(a.address)
+const s5 = await season(a.token)
+log('a credited invitee without a kept stake earns the inviter nothing yet', s5.data.xp === 3200, `xp ${s5.data.xp}`)
+const dd = [0, 1, 2].map(i => new Date(Date.now() - i * 864e5).toISOString().slice(0, 10))
+sql(dd.map(d => `insert into public.stake_snapshots (address, network, day, active_luna) values ('${inv.address}', 'testnet', '${d}', 1000000) on conflict do nothing;`).join('\n'))
+unthrottle(a.address)
+const s6 = await season(a.token)
+log('after 3 days of a 10 NIM stake the inviter gets +500', s6.data.xp === 3700, `xp ${s6.data.xp}`)
+
+// L2: a run's size counts only verified NIM (a made-up keep amount doesn't lift a 1 Luna run over the minimum).
+const b2 = await signIn()
+const kb = Date.now() - 2 * 3600e3
+sql(`insert into public.contacts (id, address, network, name, contact_address) values ('c1', '${b2.address}', 'testnet', 'Ada', 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8');
+insert into public.plans (address, network, slices, plan_started_at, first_seen_at) values ('${b2.address}', 'testnet', '[{"type":"send","percent":1,"contact_id":"c1"},{"type":"keep","percent":99,"contact_id":null}]', now() - interval '1 day', now() - interval '1 day');
+insert into public.kickbacks_seen (address, network, hash, at, luna, from_address) values ('${b2.address}', 'testnet', '${hex(randomBytes(32))}', '${new Date(kb).toISOString()}', 300000, 'NQ00 POOL');
+insert into public.shares (id, address, network, amount_luna, slice_type, tx_hash, status, run_id, verified, block_at) values ('${randomUUID()}', '${b2.address}', 'testnet', 1, 'send', '${hex(randomBytes(32))}', 'confirmed', '${randomUUID()}', true, '${new Date(kb + 600e3).toISOString()}');
+insert into public.shares (id, address, network, amount_luna, slice_type, tx_hash, status, run_id) select '${randomUUID()}', '${b2.address}', 'testnet', 900000000, 'keep', null, 'confirmed', run_id from public.shares where address = '${b2.address}' limit 1;`)
+const b2s = await season(b2.token)
+const b2l = sql(`select string_agg(source, ',') from public.xp_ledger where address = '${b2.address}';`)
+log('a 1 Luna run with a huge made-up keep share earns no run XP', !(b2l || '').includes('run'), `ledger ${b2l} xp ${b2s.data.xp}`)
 
 // The ledger refuses double counting even if the code tried.
 const dup = sql(`do $$ begin

@@ -76,6 +76,9 @@ async function post(s: Session | null, body: any) {
       const { count } = await db.from('shares').select('id', { count: 'exact', head: true }).eq('address', s.address).eq('network', s.network).eq('verified', false).not('tx_hash', 'is', null).lt('check_count', 10)
       if ((count ?? 0) >= 50) return { status: 429, body: { error: 'Too many shares waiting for the chain. Try again later.' } }
     }
+    // A verified share is final: it can't move to another run or be undone (that would let the
+    // same on-chain txs earn twice).
+    if (existing?.verified && ((share.run_id && share.run_id !== existing.run_id) || share.status !== 'confirmed')) return { status: 409, body: { error: 'This share is already verified.' } }
     // A verified share keeps its proof only while its tx, amount and type stay the same.
     const same = !!existing && existing.verified && existing.tx_hash === share.tx_hash && Number(existing.amount_luna) === share.amount_luna && existing.slice_type === share.slice_type
     const row = { ...share, run_id: share.run_id ?? existing?.run_id ?? null, address: s.address, network: s.network, ...(same ? {} : { verified: false, block_at: null }) }
