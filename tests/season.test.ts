@@ -137,3 +137,22 @@ describe('checkTx: a share or stake counts only for the matching on-chain tx', (
     expect(checkTx(st, { owner, to: [to] })).toBe(false)
   })
 })
+
+import { ValidationError, validateEvent, validateShare } from '../supabase/functions/_shared/validate'
+
+describe('share and event validation (season fields)', () => {
+  const base = { id: '1b4e28ba-2fa1-41d2-883f-0016d3cca427', amount_luna: 1000, slice_type: 'send', tx_hash: 'ab'.repeat(32) }
+  it('keeps a uuid run_id', () => {
+    expect(validateShare({ ...base, run_id: '2b4e28ba-2fa1-41d2-883f-0016d3cca427' }).run_id).toBe('2b4e28ba-2fa1-41d2-883f-0016d3cca427')
+    expect(validateShare(base).run_id).toBeNull()
+  })
+  it('rejects a bad run_id', () => {
+    expect(() => validateShare({ ...base, run_id: 'run-1' })).toThrow(ValidationError)
+  })
+  it('stake events may carry a tx hash; other kinds may not', () => {
+    expect(validateEvent({ kind: 'stake', amount_luna: 10_000_000, tx_hash: 'AB'.repeat(32) }).tx_hash).toBe('ab'.repeat(32))
+    expect(validateEvent({ kind: 'connect' }).tx_hash).toBeNull()
+    expect(() => validateEvent({ kind: 'connect', tx_hash: 'ab'.repeat(32) })).toThrow(ValidationError)
+    expect(() => validateEvent({ kind: 'stake', tx_hash: 'xyz' })).toThrow(ValidationError)
+  })
+})
