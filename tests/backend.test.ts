@@ -54,9 +54,9 @@ describe('Nimiq signature verification (auth-verify)', () => {
 
 describe('session tokens', () => {
   const secret = 'x'.repeat(40)
-  it('round-trips address and network for 30 days', async () => {
+  it('round-trips address and network for 7 days (audit 16)', async () => {
     const { token, exp } = await signSession(secret, 'NQ98 2S8A BUHK HN62 HC83 98CT NFTU KNVV C67G', 'testnet', 1_000_000_000_000)
-    expect(exp - 1_000_000_000_000).toBe(30 * 86400e3)
+    expect(exp - 1_000_000_000_000).toBe(7 * 86400e3)
     const s = await verifySession(secret, token, 1_000_000_000_000 + 1000)
     expect(s).toMatchObject({ address: 'NQ98 2S8A BUHK HN62 HC83 98CT NFTU KNVV C67G', network: 'testnet' })
     expect(bearer(`Bearer ${token}`)).toBe(token)
@@ -70,6 +70,16 @@ describe('session tokens', () => {
     expect(await verifySession(secret, `${h}.${forged}.${s}`)).toBeNull()
     expect(await verifySession(secret, token, exp + 1)).toBeNull()
     expect(await verifySession(secret, 'not.a.token')).toBeNull()
+  })
+  it('a token issued more than 7 days ago is refused even if it says it lasts 30 (older tokens)', async () => {
+    const enc = (o: unknown) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    const iat = 1_000_000_000, head = enc({ alg: 'HS256', typ: 'JWT' })
+    const body = enc({ sub: 'NQ98 2S8A BUHK HN62 HC83 98CT NFTU KNVV C67G', address: 'NQ98 2S8A BUHK HN62 HC83 98CT NFTU KNVV C67G', network: 'mainnet', iat, exp: iat + 30 * 86400, iss: 'kickback' })
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${head}.${body}`)))
+    const token = `${head}.${body}.${btoa(String.fromCharCode(...sig)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
+    expect(await verifySession(secret, token, (iat + 6 * 86400) * 1000)).not.toBeNull()
+    expect(await verifySession(secret, token, (iat + 8 * 86400) * 1000)).toBeNull()
   })
 })
 

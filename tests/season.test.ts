@@ -240,3 +240,23 @@ describe('"never staked before" reads the whole history (audit 11)', () => {
     expect(await everStaked(chain(1000).page, ME, 5)).toBe(true)
   })
 })
+
+import { restakeAfterKickback } from '../supabase/functions/_shared/verify'
+describe('a restake share must come after the latest kickback (audit 16)', () => {
+  const H = 3600e3, t0 = Date.parse('2026-10-20T12:00:00Z')
+  const kicks = [t0 - 48 * H, t0 - 24 * H, t0]
+  it('a restake right after the latest kickback before the report counts', () => {
+    expect(restakeAfterKickback(t0 + 10 * 60e3, kicks, t0 + 20 * 60e3)).toBe(true)
+  })
+  it('an older stake tx from before that kickback does not (it shares nothing new)', () => {
+    expect(restakeAfterKickback(t0 - 30 * H, kicks, t0 + 20 * 60e3)).toBe(false)
+    expect(restakeAfterKickback(t0 - 60e3, kicks, t0 + 20 * 60e3)).toBe(false)
+  })
+  it('kickbacks that landed after the report do not move the bar', () => {
+    expect(restakeAfterKickback(t0 - 23 * H, kicks, t0 - 22 * H)).toBe(true)
+  })
+  it('no kickback before the report: nothing to restake yet', () => {
+    expect(restakeAfterKickback(t0, [], t0 + 60e3)).toBe(false)
+    expect(restakeAfterKickback(t0 - 50 * H, kicks, t0 - 49 * H)).toBe(false)
+  })
+})

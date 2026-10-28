@@ -167,6 +167,7 @@ Deno.serve(async (req) => {
   }
   catch (error) {
     console.error('pool-stats-cron', net, error)
-    return json({ error: (error as Error).message, rpc: rpc.stats(), ms: Date.now() - started }, 500, cors)
+    // The details stay in the function log; the caller only learns that the run failed.
+    return json({ error: 'pool stats run failed', ms: Date.now() - started }, 500, cors)
   }
 })

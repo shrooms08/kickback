@@ -36,3 +36,12 @@ export async function everStaked(page: (startAt: string | null) => Promise<Chain
   }
   return true
 }
+
+/**
+ * A restake shares a kickback: its tx must be no older than the latest kickback that had landed
+ * when the share was reported. An older stake tx shares nothing new and never counts as a restake.
+ */
+export function restakeAfterKickback(txAt: number, kickbackTimes: number[], reportedAt: number): boolean {
+  const before = kickbackTimes.filter(k => k <= reportedAt)
+  return before.length > 0 && txAt >= Math.max(...before)
+}

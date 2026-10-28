@@ -1,7 +1,7 @@
 // auth-verify: POST { address, network, nonce, publicKey, signature } -> { token, expiresAt }.
 // The nonce must be unused and under 5 minutes old (it is burned on the first try). The
 // signature is checked over the sign-in message rebuilt from the nonce row, and the public key
-// must derive to the claimed address. The token is a 30-day JWT signed with SESSION_SECRET.
+// must derive to the claimed address. The token is a 7-day JWT signed with SESSION_SECRET.
 // Rate limited in Postgres: AUTH_VERIFY_IP_MAX tries per caller IP per 10 minutes (default 30).
 import { blake2b } from 'npm:@noble/hashes@2.4.0/blake2.js'
 import { sha256 } from 'npm:@noble/hashes@2.4.0/sha2.js'

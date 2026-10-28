@@ -18,6 +18,7 @@ import type { Skin } from '../_shared/season.ts'
 import { STAKING_CONTRACT, everStaked } from '../_shared/verify.ts'
 import { TIERS, XP, seasonOf, tierInfo } from '../_shared/xp.ts'
 import { awardFromData, seasonXp, snapshotStake } from '../_shared/xpAward.ts'
+import { TtlCache } from '../_shared/rpcProxy.ts'
 
 const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
@@ -99,7 +100,8 @@ async function recheckShares(s: Session) {
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
-const cachedQuests = new Map<string, { quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>()
+// Quests from the last award run per wallet: kept 10 minutes, at most 5,000 wallets per isolate.
+const cachedQuests = new TtlCache<{ quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>(10 * 60_000, 5000)
 const key = (s: Session) => `${s.network}:${s.address}`
 
 async function getSeason(s: Session) {
@@ -155,7 +157,7 @@ async function getSeason(s: Session) {
   const season = seasonOf()
   // Award work runs at most once a minute per wallet; in between, quests are read from the last run.
   if (!fresh) await snapshotStake(s.address, s.network).catch(() => null)
-  const { quests } = fresh && cachedQuests.has(key(s)) ? cachedQuests.get(key(s))! : await awardFromData(s.address, s.network)
+  const { quests } = (fresh && cachedQuests.get(key(s))) || await awardFromData(s.address, s.network)
   cachedQuests.set(key(s), { quests })
   const xp = await seasonXp(s.address, s.network, season.id)
   const tier = tierInfo(xp)

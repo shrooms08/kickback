@@ -52,6 +52,8 @@ const s2 = await season(a.token)
 log('reading the season again the same day adds nothing', s2.data.xp === 2000, `xp ${s2.data.xp}`)
 log('xp-cron without the secret is refused', (await call('xp-cron?network=testnet', {})).status === 403)
 log('xp-cron with a wrong secret is refused', (await call('xp-cron?network=testnet', { headers: { 'x-cron-secret': 'nope' } })).status === 403)
+// Audit 16: the secret is compared as SHA-256 digests (fixed length, no early exit on the secret's bytes).
+log('cron_secret_ok() compares digests, not the secret itself', /digest\(/.test(sql(`select pg_get_functiondef('public.cron_secret_ok(text)'::regprocedure);`)))
 
 // Runs: a plan, 3 kickbacks today, 3 verified runs (each after a kickback, sends + restakes), and
 // 1 extra run with no kickback before it. Expect 2 counted runs (+400), 2 shares (+200), quests run3 and add done (+600).
