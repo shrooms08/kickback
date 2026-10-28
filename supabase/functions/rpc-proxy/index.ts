@@ -34,7 +34,9 @@ Deno.serve(async (req) => {
   let reply = cache.get(key)
   if (!reply) {
     try { reply = await forward(net, check.method, check.params) }
-    catch { return json({ jsonrpc: '2.0', id: check.id, error: { code: -32000, message: 'No Nimiq RPC endpoint reachable' } }, 502, cors) }
+    // The proxy itself is fine; no upstream could answer this method. A JSON-RPC error (HTTP 200)
+    // so the app doesn't take the proxy for down (it fails over on 5xx).
+    catch { return json({ jsonrpc: '2.0', id: check.id, error: { code: -32001, message: 'No Nimiq RPC endpoint can answer this right now' } }, 200, cors) }
     cache.set(key, reply)
   }
   return json({ jsonrpc: '2.0', id: check.id, ...reply }, 200, cors)

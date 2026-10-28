@@ -139,6 +139,7 @@ const lines = computed(() => {
     ['window.nimiq', `at boot: ${diag.nimiqAtBoot ? 'yes' : 'no'} · now: ${window.nimiq ? 'yes' : 'no'}`],
     ['Host network / language', `${host.network || 'n/a'} / ${host.language || 'n/a'}`],
     ['Network', `${net.network} · from ${net.source} · network id ${net.networkId} · genesis block ${net.genesisBlock}`],
+    ['RPC URLs', rpcPool.status().map(e => e.kind === 'direct' ? e.url : e.kind === 'rest' ? `REST fallback ${e.url}` : `rpc-proxy ${e.url}`).join(' · ')],
     ['RPC active', rpcHealth.active ? rpcHealth.active.replace('https://', '') : 'none: every endpoint is waiting to be retried (degraded mode)'],
     ['RPC endpoints', (void rpcHealth.tick, rpcPool.status().map(e => `${e.kind === 'proxy' ? 'proxy' : e.url.replace('https://', '')}: ${e.state}${e.latencyMs != null ? ` ${e.latencyMs} ms` : ''}${e.lastError ? ` (${e.lastError})` : ''}`).join(' · '))],
     ['Validators API URL', net.validatorsApiUrl],

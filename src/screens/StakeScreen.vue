@@ -135,7 +135,7 @@ function press(k: string) {
           <template v-else>{{ k }}</template>
         </button>
       </div>
-      <div class="kb-actionbar" style="--kb-ab-pb: 20px" data-kb="action-bar">
+      <div class="kb-actionbar foot" style="--kb-ab-pb: 20px" data-kb="action-bar">
         <div v-if="reason" class="kb-reason">{{ reason }}</div>
         <HoldButton :label="mode === 'add' ? 'Hold to add' : 'Hold to stake'" :disabled="!!reason" @done="holdStakeDone" @blocked="shake(amountEl)" />
         <button v-if="mode === 'other'" class="kb-btn kb-btn-ghost" @click="ui.openSheet('switch')">Switch pool</button>
