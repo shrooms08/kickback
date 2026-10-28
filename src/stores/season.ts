@@ -6,6 +6,7 @@ import { useWallet } from './wallet'
 import { useDry } from './dry'
 import { useSession } from './session'
 import { useFlow } from './flow'
+import { usePlan } from './plan'
 
 // Season 1, as the server computed it from verified data (supabase/functions/season). The app
 // never decides an unlock itself: it shows what the server returns, caches it per network and
@@ -32,6 +33,8 @@ export interface SeasonData {
   skin: Skin
   streak: { current: number, best: number, savers: number, pending: number, hist: StreakDot[] }
   facts?: { runs: number, sharedLuna: number, kickbacks: number }
+  /** Verified kickbacks since the plan started (ms, Luna). Absent from an older server. */
+  kickbacks?: Array<{ hash: string, at: number, luna: number }>
   invites: { claimed: number, staked: number }
   chainOk: boolean
 }
@@ -155,6 +158,9 @@ export const useSeason = defineStore('season', {
         if (gen !== generation) return
         this.data = d
         this.error = ''
+        // The server's verified kickbacks keep Ready to share complete on any phone.
+        const plan = usePlan()
+        if (d.kickbacks?.length && plan.owner.replace(/\s/g, '') === address.replace(/\s/g, '')) plan.rememberKickbacks(d.kickbacks)
         this.lastLoadAt = Date.now()
         prefSet(key(this.address, 'data'), JSON.stringify(d))
         // The server's skin wins unless this phone picked one it hasn't sent yet.

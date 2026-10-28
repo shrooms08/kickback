@@ -18,7 +18,7 @@ import type { EpochClock, History, Kickback, PoolStats, Staker, Tx } from '../se
 import { calculatorGross, directValidators, knownValidators, stakedRatio, status, supply } from '../services/validators'
 import type { ApiValidator } from '../services/validators'
 import { cacheGet, cacheSet, pruneCache } from '../lib/cache'
-import { ledgerFor, readyLuna } from '../lib/money'
+import { ledgerFor, readyLuna, withRemembered } from '../lib/money'
 import { backendEnabled, readPoolStats } from '../services/backend'
 import type { PoolStatsRow } from '../services/backend'
 import { isTestnet } from '../lib/net'
@@ -568,7 +568,9 @@ export const useLive = defineStore('live', {
       // Ready to share: wallet kickbacks since the plan started, minus what's shared or in flight.
       // Dry-run shares only count against dry-run kickbacks (and the other way round).
       const inFlight = ops.active.filter(o => o.flow === 'run' && o.dry === isDry).reduce((a, o) => a + o.req.value, 0)
-      const ready = readyLuna(kick, plan.planStartedAt, ledgerFor(plan.ledger, isDry), inFlight)
+      // Kickbacks counted once stay counted, even after they leave the 30-day history.
+      if (!wallet.isPreview) plan.rememberKickbacks(kick)
+      const ready = readyLuna(withRemembered(kick, plan.counted), plan.planStartedAt, ledgerFor(plan.ledger, isDry), inFlight)
       const since = Math.max(plan.planStartedAt ?? Infinity, plan.lastRunAtFor(isDry) ?? 0)
       const waiting = plan.planStartedAt == null ? 0 : kick.filter(k => !k.restaked && (k.dry ? k.at >= (plan.lastRunAtFor(true) ?? 0) : k.manual ? k.at >= (plan.lastRunAtFor(false) ?? 0) : k.at >= since)).length
 

@@ -3,7 +3,8 @@ import { DEFAULT_CONTACTS, DEFAULT_PLAN, NO_CONTACT_PLAN } from '../services/moc
 import type { Contact } from '../services/mock'
 import { sameSplit } from '../lib/plan'
 import type { Split } from '../lib/plan'
-import type { LedgerEntry } from '../lib/money'
+import type { Counted, LedgerEntry } from '../lib/money'
+import { EMPTY_COUNTED, rememberKickbacks } from '../lib/money'
 import { prefGet, prefSet } from '../lib/cache'
 import { DEFAULT_MIN_READY, MIN_READY_CHOICES } from '../lib/minReady'
 import { uuid } from '../lib/uuid'
@@ -24,6 +25,8 @@ interface Persisted {
   minReadyLuna?: number
   /** Testnet only: test kickbacks marked in Diagnostics. */
   marked?: MarkedKickback[]
+  /** Real wallet kickbacks counted since the plan started (they stay ready after leaving the 30-day history). */
+  counted?: Counted
 }
 
 /** A testnet test kickback: real testnet NIM already in the wallet, marked as ready to share. */
@@ -51,6 +54,8 @@ export const usePlan = defineStore('plan', {
     ledger: [] as LedgerEntry[],
     /** Testnet only: test kickbacks marked in Diagnostics (plans are stored per network). */
     marked: [] as MarkedKickback[],
+    /** Kickbacks counted since the plan started, remembered by hash. */
+    counted: EMPTY_COUNTED as Counted,
     /** Run when ready reaches: 0.10 / 1 / 5 NIM (Luna). */
     minReadyLuna: DEFAULT_MIN_READY as number,
     contacts: DEFAULT_CONTACTS.slice() as Contact[],
@@ -113,7 +118,7 @@ export const usePlan = defineStore('plan', {
       catch { p = null }
       const d: Persisted = p ?? { contacts: [], saved: NO_CONTACT_PLAN.slice() as Split, savedRecipient: null, planStartedAt: null, ledger: [] }
       lastWritten = ''
-      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], minReadyLuna: d.minReadyLuna ?? DEFAULT_MIN_READY, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
+      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], counted: d.counted ?? EMPTY_COUNTED, minReadyLuna: d.minReadyLuna ?? DEFAULT_MIN_READY, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
       // Older plans could hold a send share with no recipient while Home and the Plan tab
       // showed the first contact: store that contact, so what is shown is what runs and syncs.
       if (this.contacts.length && !this.contacts.some(c => c.id === this.savedRecipient)) this.savedRecipient = this.resolveRecipient(this.savedRecipient)
@@ -122,7 +127,7 @@ export const usePlan = defineStore('plan', {
     },
     persist() {
       if (!this.owner) return
-      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}) }
+      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}), ...(this.counted.items.length || this.counted.foldedLuna ? { counted: this.counted } : {}) }
       const json = JSON.stringify(d)
       if (json === lastWritten) return
       lastWritten = json
@@ -167,6 +172,11 @@ export const usePlan = defineStore('plan', {
       if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
       if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
       this.persist()
+    },
+    /** Remember kickbacks seen now (history, full scan, or the server's verified list). Writes only on change. */
+    rememberKickbacks(seen: ReadonlyArray<{ hash: string, at: number, luna: number, restaked?: boolean, dry?: boolean, manual?: boolean }>) {
+      const next = rememberKickbacks(this.counted, seen, this.planStartedAt)
+      if (next !== this.counted) { this.counted = next; this.persist() }
     },
     setMinReady(luna: number) {
       if (!(MIN_READY_CHOICES as readonly number[]).includes(luna)) return
