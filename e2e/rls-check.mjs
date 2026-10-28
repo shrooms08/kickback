@@ -17,7 +17,7 @@ async function rest(method, path, body) {
 }
 const short = d => JSON.stringify(d).slice(0, 110)
 
-for (const t of ['plans', 'contacts', 'shares', 'users', 'events', 'auth_nonces', 'pool_probes']) {
+for (const t of ['plans', 'contacts', 'shares', 'users', 'events', 'auth_nonces', 'pool_probes', 'rate_limits']) {
   const r = await rest('GET', `${t}?select=*&limit=5`)
   log(`anon cannot read ${t}`, r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0), `HTTP ${r.status} ${short(r.data)}`)
 }
@@ -40,8 +40,9 @@ for (const [name, method, path, body] of writes) {
   const r = await rest(method, path, body)
   log(`anon cannot ${name}`, r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0), `HTTP ${r.status} ${short(r.data)}`)
 }
-for (const fn of ['kickback_stats', 'cron_secret_ok']) {
-  const r = await rest('POST', `rpc/${fn}`, fn === 'cron_secret_ok' ? { p: 'guess' } : {})
+const rpcArgs = { cron_secret_ok: { p: 'guess' }, hit_rate_limit: { p_key: 'rpc:global', p_window_s: 60, p_max: 0 } }
+for (const fn of ['kickback_stats', 'cron_secret_ok', 'hit_rate_limit']) {
+  const r = await rest('POST', `rpc/${fn}`, rpcArgs[fn] ?? {})
   log(`anon cannot call ${fn}()`, r.status >= 400, `HTTP ${r.status} ${short(r.data)}`)
 }
 const after = await rest('GET', 'pool_stats?select=name&name=eq.hacked')
