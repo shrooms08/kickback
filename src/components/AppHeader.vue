@@ -45,7 +45,8 @@ function logoTap() {
 <style scoped>
 .header { display: flex; align-items: center; gap: 8px; height: 52px; }
 .logo-tap { display: grid; touch-action: manipulation; -webkit-user-select: none; user-select: none; flex: none; }
-.addr { margin-left: auto; display: flex; align-items: center; height: 44px; border-radius: 999px; border: 1px solid var(--kb-line); min-width: 0; }
+.addr { margin-left: auto; display: flex; align-items: center; height: 44px; border-radius: 999px; border: 1px solid var(--kb-line); min-width: 0; flex: 0 1 auto; }
+@media (max-width: 370px) { .chip :deep(.swap) { display: none; } .chip { padding: 0 10px; } }
 .chip {
   height: 42px; padding: 0 12px; border-radius: 999px; border: none; background: transparent;
   display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--kb-text-2); white-space: nowrap; min-width: 0;

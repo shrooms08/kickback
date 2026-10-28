@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import Icon from '../components/Icon.vue'
 import type { IconName } from '../components/Icon.vue'
-import { ringFill, ringUri } from '../components/badges'
-import { COSMETIC_NOTE, MILESTONE_LIST, SKIN_LIST, useSeason } from '../stores/season'
+import { badgeUri, ringFill, ringUri } from '../components/badges'
+import SegmentedBar from '../components/SegmentedBar.vue'
+import { int0 } from '../lib/format'
+import { COSMETIC_NOTE, MILESTONE_LIST, QUEST_TITLES, SKIN_LIST, XP_WAYS, useSeason } from '../stores/season'
 import type { Skin, StreakDot } from '../stores/season'
 import { useSession } from '../stores/session'
 import { useNav } from '../stores/nav'
@@ -40,6 +42,16 @@ const state = computed(() => {
   if (!d.value) return season.loading ? 'loading' : 'soon'
   return 'live'
 })
+const tier = computed(() => d.value?.tier ?? null)
+const xp = computed(() => d.value?.xp ?? 0)
+const ended = computed(() => !!d.value?.season.ended)
+const nextIn = computed(() => {
+  const t = d.value?.season.nextStartsAt ? Date.parse(d.value.season.nextStartsAt) - now.value : 0
+  return t > 0 ? `${Math.ceil(t / 864e5)}d` : 'soon'
+})
+const tierNext = computed(() => !tier.value ? '' : tier.value.next ? `${int0(tier.value.toNext)} XP to ${tier.value.next}` : tier.value.sub < 2 ? `Top tier · ${int0(tier.value.toNext)} XP to Legend ${['II', 'III'][tier.value.sub]}` : 'Top tier reached')
+const ladder = computed(() => (d.value?.tiers ?? []).map((t, i) => ({ ...t, i, cur: tier.value?.i === i, on: (tier.value?.i ?? -1) >= i, badge: badgeUri(i, (tier.value?.i ?? -1) >= i) })))
+const quests = computed(() => (d.value?.quests ?? []).map(q => ({ ...q, title: QUEST_TITLES[q.key] })))
 function apply(k: Skin) { void season.applySkin(k) }
 function share() { ui.openSheet('share') }
 const icon = (k: string) => k as IconName
@@ -62,7 +74,36 @@ const icon = (k: string) => k as IconName
       <div v-else-if="state === 'soon'" class="notice" data-kb="season-soon">Season 1 is starting soon. Your streak and unlocks will show here.</div>
       <div v-else-if="state === 'loading'" class="kb-skel" style="height: 180px; border-radius: var(--kb-r-card)" />
 
-      <div class="hero" data-kb="season-hero">
+      <div v-if="ended && tier" class="hero" data-kb="season-ended">
+        <div class="kb-eyebrow">Season {{ d?.season.id }} ended</div>
+        <div class="big kb-num">{{ tier.name }} {{ tier.roman }}</div>
+        <div class="meta">Final tier · {{ int0(xp) }} XP · Best streak {{ st.best }} in a row</div>
+        <div class="meta">Season {{ (d?.season.id ?? 1) + 1 }} starts in {{ nextIn }}. Your unlocks stay: skins and badge frames carry into the next season.</div>
+      </div>
+
+      <div v-else-if="tier" class="hero" data-kb="tier-hero">
+        <div class="hero-top">
+          <span class="tbadge" :style="{ backgroundImage: badgeUri(tier.i, true) }" />
+          <div class="col">
+            <div class="kb-eyebrow">Your tier</div>
+            <div class="big kb-num">{{ tier.name }} <span class="unit">{{ tier.roman }}</span></div>
+          </div>
+        </div>
+        <SegmentedBar :segments="3" :value="tier.sub + 1" size="lg" pulse />
+        <div class="row"><span class="meta"><b class="kb-num" style="color: var(--kb-text)">{{ int0(xp) }} XP</b> · {{ tierNext }}</span></div>
+        <div class="meta">{{ endsIn }}</div>
+        <button class="kb-btn kb-btn-ghost share" data-kb="season-share" @click="share"><Icon name="share" :size="18" /> Share my kickbacks</button>
+      </div>
+
+      <section v-if="quests.length && !ended" class="card" data-kb="quests">
+        <div class="row"><div class="kb-eyebrow">This week</div><span class="meta">Resets Monday</span></div>
+        <div v-for="q in quests" :key="q.key" class="quest" :class="{ done: q.done }" :data-kb-quest="q.key">
+          <div class="row"><span class="qt">{{ q.title }} <span class="meta">({{ q.p }}/{{ q.n }}{{ q.key === 'keep' ? ' days' : '' }})</span></span><span class="qxp">+300 XP</span></div>
+          <SegmentedBar :segments="q.n" :value="q.p" size="sm" />
+        </div>
+      </section>
+
+      <div v-if="!tier" class="hero" data-kb="season-hero">
         <div class="hero-top">
           <span class="ring" :style="{ backgroundImage: ring }" />
           <div class="col">
@@ -75,7 +116,8 @@ const icon = (k: string) => k as IconName
       </div>
 
       <section class="card">
-        <div class="row"><div class="kb-eyebrow">Kickback streak</div><span class="meta">Last 14</span></div>
+        <div class="row"><div class="kb-eyebrow">Kickback streak</div><span class="meta kb-num" data-kb="streak-count">{{ st.current }} in a row · best {{ st.best }}</span></div>
+        <div v-if="tier" class="meta">{{ saversLine }}</div>
         <p class="kb-body">Kickbacks in a row, shared within 24h of landing. Miss one and your weekly streak saver keeps it going.</p>
         <div class="dots" data-kb="streak-dots">
           <span v-for="(k, i) in dots" :key="i" class="sdot" :class="k" :title="k" />
@@ -88,8 +130,17 @@ const icon = (k: string) => k as IconName
         </div>
       </section>
 
+      <section v-if="ladder.length" class="card" data-kb="ladder">
+        <div class="kb-eyebrow">Tiers</div>
+        <div v-for="t in ladder" :key="t.name" class="tier" :class="{ cur: t.cur, on: t.on }">
+          <span class="tb" :style="{ backgroundImage: t.badge }" />
+          <span class="tn">{{ t.name }}</span>
+          <span class="meta kb-num">{{ int0(t.at) }} XP</span>
+        </div>
+      </section>
+
       <section class="col12">
-        <div class="row"><div class="kb-eyebrow">Stack skins</div><span class="meta">Unlocked by milestones</span></div>
+        <div class="row"><div class="kb-eyebrow">Stack skins</div><span class="meta">{{ tier ? 'One per tier' : 'Unlocked by milestones' }}</span></div>
         <div class="skins" data-kb="skins">
           <div v-for="s in skins" :key="s.k" class="skin" :class="{ on: s.on, applied: s.applied, legend: s.k === 'legend' }" :data-kb-skin-card="s.k">
             <div class="mini">
@@ -114,6 +165,12 @@ const icon = (k: string) => k as IconName
             <span class="ml">{{ m.label }}</span>
           </div>
         </div>
+      </section>
+
+      <section v-if="tier" class="card" data-kb="xp-ways">
+        <div class="kb-eyebrow">How XP is earned</div>
+        <div v-for="[l, v] in XP_WAYS" :key="l" class="way"><span>{{ l }}</span><span class="meta">{{ v }}</span></div>
+        <p class="meta">Counted on the server from your stake and transactions on chain. Nothing you tap in the app adds XP by itself.</p>
       </section>
 
       <section class="card" data-kb="invite">
@@ -182,5 +239,17 @@ const icon = (k: string) => k as IconName
 .cp { height: 40px; padding: 0 16px; border-radius: 999px; background: var(--kb-lime); color: var(--kb-bg); font-size: 13px; font-weight: 800; letter-spacing: 0; display: grid; place-items: center; }
 .stats { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .sv { font-size: 26px; font-weight: 900; }
+.tbadge { width: 56px; height: 56px; background-size: 56px 56px; flex: none; }
+.quest { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.qt { font-size: 14px; font-weight: 700; }
+.qxp { font-size: 13px; font-weight: 800; color: var(--kb-text-2); flex: none; }
+.quest.done .qxp { color: var(--kb-lime); }
+.tier { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 14px; color: var(--kb-text-2); }
+.tier.on { color: var(--kb-text); }
+.tier.cur { background: var(--kb-raised); }
+.tb { width: 28px; height: 28px; background-size: 28px 28px; flex: none; }
+.tn { flex: 1; font-size: 15px; font-weight: 800; }
+.way { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; font-weight: 700; }
+.way .meta { text-align: right; font-weight: 500; }
 .foot { font-size: 12px; line-height: 1.45; color: var(--kb-text-3); text-align: center; padding: 0 12px; }
 </style>
