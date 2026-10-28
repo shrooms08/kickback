@@ -22,22 +22,34 @@ export async function verifyShare(rpc: Rpc, row: ShareRow): Promise<boolean> {
   let tx
   try { tx = await getTx(rpc, row.tx_hash) }
   catch { return false } // RPC trouble: try again later
-  const ok = checkTx(tx, { owner: row.address, value: Number(row.amount_luna), to: await recipientsFor(row) })
-  const patch = ok ? { verified: true, block_at: new Date(tx!.timestamp).toISOString(), checked_at: new Date().toISOString() } : { checked_at: new Date().toISOString() }
-  const { error } = await db.from('shares').update(patch).eq('id', row.id).eq('address', row.address).eq('network', row.network)
+  // A stake already counted as a verified stake event can't also be a restake share.
+  const { data: asStake } = await db.from('events').select('id').eq('network', row.network).eq('tx_hash', row.tx_hash).eq('verified', true).limit(1)
+  const ok = !asStake?.length && checkTx(tx, { owner: row.address, value: Number(row.amount_luna), to: await recipientsFor(row) })
+  const now = new Date().toISOString()
+  const patch = ok ? { verified: true, block_at: new Date(tx!.timestamp).toISOString(), checked_at: now } : { checked_at: now }
+  // Only the row exactly as checked may be marked verified: if the app changed it meanwhile,
+  // nothing matches and nothing is verified (a trigger also clears verified on such changes).
+  const { data, error } = await db.from('shares').update(patch)
+    .eq('id', row.id).eq('address', row.address).eq('network', row.network)
+    .eq('tx_hash', row.tx_hash).eq('amount_luna', row.amount_luna).eq('slice_type', row.slice_type).eq('status', 'confirmed')
+    .select('id')
   if (error) {
     // Another share already holds this tx (unique verified hash): this one never counts.
-    if (error.code === '23505') { await db.from('shares').update({ checked_at: new Date().toISOString() }).eq('id', row.id); return false }
+    if (error.code === '23505') { await db.from('shares').update({ checked_at: now }).eq('id', row.id); return false }
     throw error
   }
-  return ok
+  if (!ok) await db.rpc('kickback_share_checked', { p_id: row.id })
+  return ok && (data?.length ?? 0) > 0
 }
 
 /** A stake or add-stake event counts when its tx went from the wallet to the staking contract. */
-export async function verifyStakeEvent(rpc: Rpc, id: number, owner: string, hash: string, amountLuna: number | null): Promise<boolean> {
+export async function verifyStakeEvent(rpc: Rpc, network: Net, id: number, owner: string, hash: string, amountLuna: number | null): Promise<boolean> {
   let tx
   try { tx = await getTx(rpc, hash) }
   catch { return false }
+  // A tx already counted as a verified share can't also count as a stake.
+  const { data: asShare } = await db.from('shares').select('id').eq('network', network).eq('tx_hash', hash).eq('verified', true).limit(1)
+  if (asShare?.length) return false
   if (!checkTx(tx, { owner, to: [STAKING_CONTRACT], ...(amountLuna ? { value: amountLuna } : {}) })) return false
   const { error } = await db.from('events').update({ verified: true }).eq('id', id)
   if (error && error.code !== '23505') throw error

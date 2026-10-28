@@ -71,6 +71,11 @@ async function post(s: Session | null, body: any) {
     const { data: existing, error: e1 } = await db.from('shares').select('address, network, amount_luna, slice_type, tx_hash, run_id, verified').eq('id', share.id).maybeSingle()
     if (e1) throw e1
     if (existing && (existing.address !== s.address || existing.network !== s.network)) return { status: 403, body: { error: 'Not your share.' } }
+    // Each unverified share costs chain checks: at most 50 waiting per wallet.
+    if (!existing && share.tx_hash) {
+      const { count } = await db.from('shares').select('id', { count: 'exact', head: true }).eq('address', s.address).eq('network', s.network).eq('verified', false).not('tx_hash', 'is', null).lt('check_count', 10)
+      if ((count ?? 0) >= 50) return { status: 429, body: { error: 'Too many shares waiting for the chain. Try again later.' } }
+    }
     // A verified share keeps its proof only while its tx, amount and type stay the same.
     const same = !!existing && existing.verified && existing.tx_hash === share.tx_hash && Number(existing.amount_luna) === share.amount_luna && existing.slice_type === share.slice_type
     const row = { ...share, run_id: share.run_id ?? existing?.run_id ?? null, address: s.address, network: s.network, ...(same ? {} : { verified: false, block_at: null }) }
@@ -85,7 +90,7 @@ async function post(s: Session | null, body: any) {
     // Only a signed-in wallet's stake tx can be verified (it must come from that wallet).
     const { data, error } = await db.from('events').insert({ ...ev, tx_hash: s ? ev.tx_hash : null, network, address: s?.address ?? null }).select('id').single()
     if (error) throw error
-    const verified = !!(s && ev.tx_hash) && await verifyStakeEvent(rpcFor(s.network), data.id, s.address, ev.tx_hash!, ev.amount_luna)
+    const verified = !!(s && ev.tx_hash) && await verifyStakeEvent(rpcFor(s.network), s.network, data.id, s.address, ev.tx_hash!, ev.amount_luna)
     return { status: 200, body: { ok: true, verified } }
   }
   throw new ValidationError('send a share or an event')

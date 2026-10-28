@@ -116,7 +116,7 @@ describe('invite codes', () => {
 describe('checkTx: a share or stake counts only for the matching on-chain tx', () => {
   const owner = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
   const to = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
-  const tx = { hash: 'ab'.repeat(32), from: owner.replace(/ /g, ''), to: to.replace(/ /g, ''), value: 250_000, timestamp: MON, executionResult: true }
+  const tx = { hash: 'ab'.repeat(32), from: owner.replace(/ /g, ''), to: to.replace(/ /g, ''), value: 250_000, timestamp: MON, blockNumber: 10, executionResult: true }
   it('accepts the exact send', () => {
     expect(checkTx(tx, { owner, value: 250_000, to: [to] })).toBe(true)
   })
@@ -171,5 +171,33 @@ describe('RPC "not found" is told apart from network trouble', () => {
   it('HTTP errors and timeouts are not', () => {
     expect(isNotFound(new Error('getStakerByAddress: HTTP 503'))).toBe(false)
     expect(isNotFound(new Error('getStakerByAddress: Internal error'))).toBe(false)
+  })
+})
+
+import { countedRuns } from '../supabase/functions/_shared/season'
+import { validateContact } from '../supabase/functions/_shared/validate'
+
+describe('audit fixes', () => {
+  const owner = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
+  const to = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
+  const tx = { hash: 'ab'.repeat(32), from: owner, to, value: 250_000, timestamp: MON, blockNumber: 10, executionResult: true }
+  it('checkTx needs an executed tx in a block', () => {
+    expect(checkTx(tx, { owner, value: 250_000, to: [to] })).toBe(true)
+    expect(checkTx({ ...tx, executionResult: undefined }, { owner, value: 250_000, to: [to] })).toBe(false)
+    expect(checkTx({ ...tx, blockNumber: 0 }, { owner, value: 250_000, to: [to] })).toBe(false)
+  })
+  it('the staking contract cannot be saved as a contact', () => {
+    expect(() => validateContact({ id: 'c1', name: 'x', contact_address: STAKING_CONTRACT }, owner)).toThrow(ValidationError)
+  })
+  it('a run counts only if a kickback landed since the last counted run', () => {
+    const k = [MON, MON + 12 * H]
+    const runs = [{ id: 'a', at: MON + 1 * H }, { id: 'b', at: MON + 2 * H }, { id: 'c', at: MON + 13 * H }, { id: 'd', at: MON + 14 * H }]
+    expect(countedRuns(k, runs)).toEqual(['a', 'c'])
+  })
+  it('a run before any kickback never counts', () => {
+    expect(countedRuns([MON + 5 * H], [{ id: 'a', at: MON }])).toEqual([])
+  })
+  it('one run can follow several kickbacks', () => {
+    expect(countedRuns([MON, MON + 12 * H], [{ id: 'a', at: MON + 20 * H }])).toEqual(['a'])
   })
 })

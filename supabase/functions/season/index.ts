@@ -9,10 +9,10 @@ import { db } from '../_shared/db.ts'
 import { corsHeaders, json, readJson } from '../_shared/http.ts'
 import { bearer, verifySession } from '../_shared/session.ts'
 import type { Session } from '../_shared/session.ts'
-import { getStaker, hasStake, rewardAddressOf, rpcFor, txPage } from '../_shared/chain.ts'
+import { getStaker, hasStake, rpcFor, txPage } from '../_shared/chain.ts'
 import { verifyShare } from '../_shared/proofs.ts'
 import type { ShareRow } from '../_shared/proofs.ts'
-import { SKINS, inviteCode, isInviteCode, milestonesFrom, skinsFrom, streak } from '../_shared/season.ts'
+import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, skinsFrom, streak } from '../_shared/season.ts'
 import type { Skin } from '../_shared/season.ts'
 import { STAKING_CONTRACT } from '../_shared/verify.ts'
 
@@ -41,12 +41,15 @@ async function codeFor(s: Session): Promise<string> {
 /** Read the chain: stake now, new kickbacks since the last scan. Returns false if the RPC failed. */
 async function scanChain(s: Session): Promise<boolean> {
   const rpc = rpcFor(s.network)
-  const prev = must(await db.from('chain_scan').select('newest_hash, staked').eq('address', s.address).eq('network', s.network).maybeSingle()) as { newest_hash: string | null, staked: boolean } | null
+  const prev = must(await db.from('chain_scan').select('newest_hash, staked, scanned_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { newest_hash: string | null, staked: boolean, scanned_at: string } | null
+  // At most one chain read per wallet per minute: repeated reads get the stored state.
+  if (prev && Date.now() - Date.parse(prev.scanned_at) < 60_000) return true
   try {
     const staker = await getStaker(rpc, s.address)
     const pools = must(await db.from('pool_stats').select('reward_address').eq('network', s.network).eq('payout_kind', 'direct')) as Array<{ reward_address: string | null }>
+    // Kickbacks only come from direct-payout pools the cron knows (not from any validator a wallet
+    // delegates to: a self-made validator could pay its own reward address to itself).
     const rewards = new Set(pools.map(p => norm(p.reward_address ?? '')).filter(Boolean))
-    if (staker?.delegation) { const r = await rewardAddressOf(rpc, staker.delegation); if (r) rewards.add(norm(r)) }
     const me = norm(s.address)
     let staked = !!prev?.staked || hasStake(staker)
     let newest: string | null = null, startAt: string | null = null
@@ -90,35 +93,46 @@ async function recheckShares(s: Session) {
   const cutoff = new Date(Date.now() - 2 * 60e3).toISOString()
   const rows = must(await db.from('shares').select('id, address, network, amount_luna, slice_type, tx_hash, status')
     .eq('address', s.address).eq('network', s.network).eq('verified', false).eq('status', 'confirmed').not('tx_hash', 'is', null)
-    .or(`checked_at.is.null,checked_at.lt.${cutoff}`).limit(10)) as ShareRow[]
+    .or(`checked_at.is.null,checked_at.lt.${cutoff}`).lt('check_count', 10).gt('created_at', new Date(Date.now() - 48 * 3600e3).toISOString()).limit(10)) as ShareRow[]
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
 async function getSeason(s: Session) {
   const code = await codeFor(s)
-  await recheckShares(s)
-  const chainOk = (await scanChain(s)) && (await creditInvites(s))
+  const scanned = must(await db.from('chain_scan').select('scanned_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { scanned_at: string } | null
+  const fresh = !!scanned && Date.now() - Date.parse(scanned.scanned_at) < 60_000
+  if (!fresh) await recheckShares(s)
+  const chainOk = (await scanChain(s)) && (fresh || (await creditInvites(s)))
   const mine = (table: string, cols: string) => db.from(table).select(cols).eq('address', s.address).eq('network', s.network)
   const [scanR, kicksR, sharesR, userR] = await Promise.all([
     mine('chain_scan', 'staked').maybeSingle(),
-    mine('kickbacks_seen', 'at'),
+    mine('kickbacks_seen', 'at, luna'),
     mine('shares', 'id, run_id, slice_type, amount_luna, block_at').eq('verified', true).eq('status', 'confirmed'),
     mine('users', 'skin').maybeSingle(),
   ])
   const scan = must(scanR) as { staked: boolean } | null
-  const kicks = must(kicksR) as Array<{ at: string }>
+  const kicks = must(kicksR) as Array<{ at: string, luna: number }>
   const shares = must(sharesR) as Array<{ id: string, run_id: string | null, slice_type: string, amount_luna: number, block_at: string }>
   const user = must(userR) as { skin: Skin } | null
   const invites = must(await db.from('referrals').select('credited_at').eq('network', s.network).eq('inviter', s.address)) as Array<{ credited_at: string | null }>
+  const plan = must(await db.from('plans').select('plan_started_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null } | null
+  // Shares count only after the plan started, and a run only when a kickback landed since the last
+  // counted run: random transfers to a contact, or many tiny runs, don't add up to anything.
+  const since = plan?.plan_started_at ? Date.parse(plan.plan_started_at) : Infinity
+  const kickTimes = kicks.map(k => Date.parse(k.at))
   const runAt = new Map<string, number>()
-  for (const sh of shares) { const k = sh.run_id ?? sh.id, t = Date.parse(sh.block_at); runAt.set(k, Math.min(runAt.get(k) ?? Infinity, t)) }
-  const st = streak(kicks.map(k => Date.parse(k.at)), [...runAt.values()])
+  for (const sh of shares) { const k = sh.run_id ?? sh.id, t = Date.parse(sh.block_at); if (t >= since) runAt.set(k, Math.min(runAt.get(k) ?? Infinity, t)) }
+  const counted = new Set(countedRuns(kickTimes, [...runAt].map(([id, at]) => ({ id, at }))))
+  const inRuns = shares.filter(x => counted.has(x.run_id ?? x.id))
+  const st = streak(kickTimes, [...counted].map(id => runAt.get(id)!))
+  const kickLuna = kicks.reduce((a, k) => a + Number(k.luna), 0)
   const facts = {
     staked: !!scan?.staked,
     kickbacks: kicks.length,
-    sends: shares.filter(x => x.slice_type === 'send').length,
-    runs: runAt.size,
-    sharedLuna: shares.filter(x => x.slice_type !== 'keep').reduce((a, x) => a + Number(x.amount_luna), 0),
+    sends: inRuns.filter(x => x.slice_type === 'send').length,
+    runs: counted.size,
+    // Never more than the kickbacks that actually landed.
+    sharedLuna: Math.min(kickLuna, inRuns.filter(x => x.slice_type !== 'keep').reduce((a, x) => a + Number(x.amount_luna), 0)),
     bestStreak: st.best,
     invitedStakers: invites.filter(i => i.credited_at).length,
   }
@@ -155,13 +169,18 @@ async function post(s: Session, body: any) {
   if (body?.ref !== undefined) {
     const code = typeof body.ref === 'string' ? body.ref.trim().toUpperCase() : ''
     if (!isInviteCode(code)) return { status: 400, body: { error: 'invite code is not valid' } }
+    // One inviter per wallet, checked first: a wallet that has one learns nothing about other codes.
+    const already = must(await db.from('referrals').select('inviter').eq('network', s.network).eq('invitee', s.address).maybeSingle())
+    if (already) return { status: 409, body: { error: 'this wallet already has an inviter' } }
     const owner = must(await db.from('invite_codes').select('address').eq('network', s.network).eq('code', code).maybeSingle()) as { address: string } | null
     if (!owner) return { status: 404, body: { error: 'no such invite code' } }
     if (norm(owner.address) === norm(s.address)) return { status: 400, body: { error: 'that is your own invite code' } }
-    const already = must(await db.from('referrals').select('inviter').eq('network', s.network).eq('invitee', s.address).maybeSingle())
-    if (already) return { status: 409, body: { error: 'this wallet already has an inviter' } }
+    // "Had a stake" = staked now, or ever sent a stake (an unstaked old staker doesn't count as new).
     let had: boolean
-    try { had = hasStake(await getStaker(rpcFor(s.network), s.address)) }
+    try {
+      const rpc = rpcFor(s.network)
+      had = hasStake(await getStaker(rpc, s.address)) || (await txPage(rpc, s.address, null)).some(t => norm(t.from) === norm(s.address) && norm(t.to) === norm(STAKING_CONTRACT))
+    }
     catch { return { status: 503, body: { error: 'could not check the chain, try again' } } }
     const { error } = await db.from('referrals').insert({ invitee: s.address, network: s.network, inviter: owner.address, code, had_stake_at_claim: had })
     if (error) {

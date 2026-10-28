@@ -55,6 +55,7 @@ export function validateContact(v: unknown, owner: string): ContactIn {
   if (!name || name.length > 40) fail('contact name must be 1 to 40 characters')
   if (typeof c!.contact_address !== 'string' || !isValidAddress(c!.contact_address)) fail('contact address is not a valid Nimiq address')
   if (normalizeAddress(c!.contact_address as string) === normalizeAddress(owner)) fail('a contact cannot be your own address')
+  if (normalizeAddress(c!.contact_address as string) === 'NQ7700000000000000000000000000000001') fail('a contact cannot be the staking contract')
   const a = normalizeAddress(c!.contact_address as string)
   return { id: id as string, name, contact_address: a.replace(/(.{4})/g, '$1 ').trim() }
 }

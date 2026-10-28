@@ -126,3 +126,70 @@ as $$
 $$;
 revoke execute on function public.kickback_stats() from public, anon, authenticated;
 grant execute on function public.kickback_stats() to service_role;
+
+-- Audit hardening ---------------------------------------------------------------------------
+
+-- Hashes are compared as lower-case hex (older rows may be upper case).
+update public.shares set tx_hash = lower(tx_hash) where tx_hash is not null and tx_hash <> lower(tx_hash);
+alter table public.shares add constraint shares_tx_hash_hex check (tx_hash is null or tx_hash ~ '^[0-9a-f]{64}$');
+
+-- How many times the chain was asked about an unverified share (stops after 10, or after 48h).
+alter table public.shares add column check_count integer not null default 0;
+
+-- If the app changes what a share claims (tx, amount, type), its proof is gone.
+create or replace function public.kickback_shares_reset_verified()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.tx_hash is distinct from old.tx_hash or new.amount_luna is distinct from old.amount_luna or new.slice_type is distinct from old.slice_type then
+    new.verified := false;
+    new.block_at := null;
+    new.check_count := 0;
+  end if;
+  return new;
+end
+$$;
+create trigger shares_reset_verified before update on public.shares
+  for each row execute function public.kickback_shares_reset_verified();
+
+create or replace function public.kickback_share_checked(p_id uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$ update public.shares set check_count = check_count + 1 where id = p_id $$;
+revoke execute on function public.kickback_share_checked(uuid) from public, anon, authenticated;
+grant execute on function public.kickback_share_checked(uuid) to service_role;
+
+-- Public stats by on-chain time, and only shares made after the wallet's plan started.
+create or replace function public.kickback_stats()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with nets(network) as (values ('mainnet'), ('testnet')),
+  periods(period, since) as (values ('last_7_days', now() - interval '7 days'), ('all_time', '-infinity'::timestamptz)),
+  good as (
+    select s.* from public.shares s
+    join public.plans p on p.address = s.address and p.network = s.network
+    where s.verified and s.status = 'confirmed' and s.block_at is not null
+      and p.plan_started_at is not null and s.block_at >= p.plan_started_at
+  )
+  select jsonb_object_agg(n.network, (
+    select jsonb_object_agg(pe.period, jsonb_build_object(
+      'signed_in_users',       (select count(*) from public.users u where u.network = n.network and u.last_seen_at >= pe.since),
+      'new_signed_in_users',   (select count(*) from public.users u where u.network = n.network and u.created_at >= pe.since),
+      'stakers',               (select count(distinct e.address) from public.events e where e.network = n.network and e.kind in ('stake', 'add_stake') and e.verified and e.address is not null and e.created_at >= pe.since),
+      'staked_luna',           (select coalesce(sum(e.amount_luna), 0) from public.events e where e.network = n.network and e.kind in ('stake', 'add_stake') and e.verified and e.address is not null and e.created_at >= pe.since),
+      'runs_done',             (select count(distinct g.run_id) from good g where g.network = n.network and g.run_id is not null and g.block_at >= pe.since),
+      'shared_luna',           (select coalesce(sum(g.amount_luna), 0) from good g where g.network = n.network and g.slice_type in ('send', 'restake') and g.block_at >= pe.since),
+      'sent_to_contacts_luna', (select coalesce(sum(g.amount_luna), 0) from good g where g.network = n.network and g.slice_type = 'send' and g.block_at >= pe.since)
+    )) from periods pe
+  )) from nets n
+$$;
+revoke execute on function public.kickback_stats() from public, anon, authenticated;
+grant execute on function public.kickback_stats() to service_role;

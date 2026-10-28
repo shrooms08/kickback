@@ -45,6 +45,20 @@ export function streak(kickbackTimes: number[], runTimes: number[], now = Date.n
   return { current, best, savers: used.has(weekKey(now)) ? 0 : 1, pending, hist: hist.slice(-14) }
 }
 
+/**
+ * Which plan runs count: a run shares kickbacks, so it counts only when at least one kickback
+ * landed after the last counted run (and before it). Many tiny runs after one kickback count once.
+ */
+export function countedRuns(kickbackTimes: number[], runs: Array<{ id: string, at: number }>): string[] {
+  const kicks = batchKickbacks(kickbackTimes)
+  const out: string[] = []
+  let last = -Infinity
+  for (const r of [...runs].sort((a, b) => a.at - b.at)) {
+    if (kicks.some(k => k > last && k <= r.at)) { out.push(r.id); last = r.at }
+  }
+  return out
+}
+
 export const MILESTONES = ['first_stake', 'first_kickback', 'first_share', 'ten_runs', 'hundred_shared', 'streak_30', 'invited_staker'] as const
 export type MilestoneKey = typeof MILESTONES[number]
 

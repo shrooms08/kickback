@@ -58,7 +58,7 @@ export function createRpc(url: string, budget = 14) {
     for (let attempt = 0; ; attempt++) {
       await take(cost)
       calls++; units += cost
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }) })
+      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) })
       if (res.status === 429 && attempt < 3) { tokens = 0; await sleep(5000); continue }
       if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
       const body = await res.json()
