@@ -53,6 +53,8 @@ export const useFlow = defineStore('flow', {
     runCapped: '' as string,
     runNote: '' as string,
     runAmountLuna: 0,
+    /** The run (and its Retry) is a dry run; never retried or resumed in the other mode. */
+    runDry: undefined as boolean | undefined,
     /** Withdraw (retire then remove) steps. */
     wSteps: [] as RunStep[],
     wPhase: 'review' as 'review' | 'running' | 'done',

@@ -19,7 +19,7 @@ import { useOps } from '../../stores/ops'
 import { navlog } from '../../lib/navlog'
 import { useNav } from '../../stores/nav'
 import { usePlan } from '../../stores/plan'
-import { clearFinished } from '../../money'
+import { clearFinished, moneyBusy, setDryMode } from '../../money'
 import type { DryOutcome } from '../../stores/dry'
 import { FEE_RESERVE_LUNA, parseNimInput, spendable } from '../../lib/money'
 import { isTestnet, net } from '../../lib/net'
@@ -41,8 +41,10 @@ const clock = (t: number) => new Date(t).toLocaleTimeString('en-GB') + '.' + Str
 const OUTCOMES: Array<[DryOutcome, string]> = [['approve', 'Approve'], ['reject', 'Reject'], ['network', 'Network error'], ['failAfterSend', 'Fail after send']]
 const dryBal = ref(nim2(dry.chain.balanceLuna / 1e5))
 const dryKb = ref('25')
+// Never mid-flight: a run or op started in one mode must finish in that mode.
+const busy = computed(() => moneyBusy())
 function toggleDry() {
-  dry.toggle(!dry.on)
+  if (!setDryMode(!dry.on)) return
   live.refresh({ force: true })
 }
 function setDryBalance() { dry.setBalance(parseNimInput(dryBal.value)); live.derive() }
@@ -105,6 +107,7 @@ const previewInput = ref(wallet.previewAddress)
 const previewErr = ref('')
 const inputEl = ref<HTMLInputElement>()
 function applyPreview() {
+  if (moneyBusy()) { previewErr.value = 'Wait until your plan or stake finishes.'; return }
   const a = previewInput.value.trim()
   if (!isNimiqAddress(a)) {
     previewErr.value = 'That doesn\'t look like a Nimiq address. It starts with NQ and has 36 characters.'
@@ -118,6 +121,7 @@ function applyPreview() {
   ui.closeSheet(() => openLive())
 }
 function clearPreview() {
+  if (moneyBusy()) { previewErr.value = 'Wait until your plan or stake finishes.'; return }
   previewInput.value = ''
   previewErr.value = ''
   wallet.setPreview(null)
@@ -231,7 +235,7 @@ async function again() {
   <div class="dry">
     <div class="drow">
       <div class="kb-eyebrow">Dry run</div>
-      <button class="tog" :class="{ on: dry.on }" role="switch" :aria-checked="dry.on" @click="toggleDry"><span /></button>
+      <button class="tog" :class="{ on: dry.on }" role="switch" :aria-checked="dry.on" :disabled="busy" @click="toggleDry"><span /></button>
     </div>
     <p class="dnote">Every send is simulated: no real NIM moves. Answers after 1.5 s, confirms 3 s later.</p>
     <template v-if="dry.on">
@@ -271,8 +275,8 @@ async function again() {
     >
     <div v-if="previewErr" class="perr">{{ previewErr }}</div>
     <div class="prow">
-      <button class="kb-btn pbtn apply" @click="applyPreview">Apply</button>
-      <button class="kb-btn pbtn" :disabled="!wallet.previewAddress && !previewInput" @click="clearPreview">Clear</button>
+      <button class="kb-btn pbtn apply" :disabled="busy" @click="applyPreview">Apply</button>
+      <button class="kb-btn pbtn" :disabled="busy || (!wallet.previewAddress && !previewInput)" @click="clearPreview">Clear</button>
     </div>
   </div>
   <div class="lines">
@@ -300,6 +304,7 @@ async function again() {
 .dry.test { border-color: var(--kb-third); }
 .drow { display: flex; justify-content: space-between; align-items: center; }
 .dnote { font-size: 12px; line-height: 1.4; color: var(--kb-text-2); }
+.tog:disabled, .pbtn:disabled { opacity: .45; cursor: not-allowed; }
 .tog { width: 52px; height: 30px; border-radius: 999px; border: 1px solid var(--kb-line); background: var(--kb-bg); position: relative; cursor: pointer; padding: 0; }
 .tog span { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--kb-text-3); transition: transform 160ms var(--kb-ease); }
 .tog.on { background: var(--kb-lime); border-color: var(--kb-lime); }

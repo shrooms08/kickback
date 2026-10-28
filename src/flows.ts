@@ -17,9 +17,9 @@ import { useData } from './stores/data'
 import { sameAddr } from './services/chain'
 import { logNav } from './lib/navlog'
 import { useSession } from './stores/session'
-import { useOps } from './stores/ops'
+
 import {
-  clearFinished, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
+  clearFinished, moneyBusy, openWithdraw, restoreRun, retryRunLive, reviewRun, runPlanLive, stakeLive, stopLive, switchLive, undoLive,
 } from './money'
 
 const isLive = () => !useWallet().isMock
@@ -75,9 +75,9 @@ export async function connectWallet() {
  * opens read only (preview: no staking, runs or sign-in); picking Nimiq Pay's account goes back.
  */
 export async function switchWallet(address: string) {
-  const wallet = useWallet(), ui = useUi(), flow = useFlow()
+  const wallet = useWallet(), ui = useUi()
   if (!wallet.basicAccounts.includes(address) || sameAddr(address, wallet.effectiveAddress)) return
-  if (flow.runPhase === 'running' || useOps().active.length) { ui.showToast('Wait until your plan or stake finishes.'); return }
+  if (moneyBusy()) { ui.showToast('Wait until your plan or stake finishes.'); return }
   const own = sameAddr(address, wallet.address)
   if (wallet.isMock) { ui.showToast(own ? 'Back to your Nimiq Pay wallet' : `Viewing ${addressShort(address)} read only`); return }
   wallet.setPreview(own ? null : address)

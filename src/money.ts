@@ -7,6 +7,7 @@ import { minLabel } from './lib/minReady'
 // are checked on chain before we say anything; after a send we show
 // "confirming" and poll until it is in a block.
 import { watch } from 'vue'
+import { moneyLock } from './lib/moneyLock'
 import { back, go } from './router'
 import { useNav } from './stores/nav'
 import type { ScreenName } from './stores/nav'
@@ -77,11 +78,51 @@ function fail(kind: 'notSent' | 'chainFailed', backTo: ScreenName) {
   go('error')
 }
 
+// ---------- one money action at a time ----------
+
+/**
+ * Set synchronously before the first await of a money action, so a second hold (HoldButton
+ * re-arms after 520 ms, while the balance read can take 15 s) can't start a second one. Released
+ * once the action's own guard exists (its op is active, or the run is marked running).
+ */
+export const moneyLocked = () => moneyLock.value != null
+
+function acquire(name: string): (() => void) | null {
+  if (moneyLock.value) { useUi().showToast('Still starting. Nothing was sent twice.'); return null }
+  moneyLock.value = name
+  let released = false
+  return () => { if (released) return; released = true; moneyLock.value = null }
+}
+
+async function withLock(name: string, fn: (release: () => void) => Promise<unknown>): Promise<void> {
+  const release = acquire(name)
+  if (!release) return
+  try { await fn(release) }
+  finally { release() }
+}
+
+/** A money action is starting, running or confirming: no mode, preview or wallet changes now. */
+export function moneyBusy(): boolean {
+  const flow = useFlow()
+  return moneyLock.value != null || flow.runPhase === 'running' || flow.wPhase === 'running' || useOps().active.length > 0
+}
+
+/** Diagnostics dry-run toggle. Refused mid-flight, so a dry run can't turn into a real one. */
+export function setDryMode(on: boolean): boolean {
+  if (moneyBusy()) { useUi().showToast('Wait until your plan or stake finishes.'); return false }
+  useDry().toggle(on)
+  return true
+}
+
 // ---------- stake / add to stake ----------
 
-export async function stakeLive() {
-  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
+export function stakeLive() {
   if (previewBlocked()) return
+  return withLock('stake', stakeLocked)
+}
+
+async function stakeLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
   if (useOps().active.some(o => o.flow === 'stake')) return ui.showToast('Your stake is still confirming. Nothing else to do.')
   // Degraded mode: the stake couldn't be read, so we can't tell a first stake from adding more.
   if (account.chainUnknown) return ui.showToast('Can\'t check your stake right now. Try again in a minute.')
@@ -105,6 +146,7 @@ export async function stakeLive() {
   const req: SendRequest = isNew ? { kind: 'newStaker', value: amount, delegation: pool.validator } : { kind: 'addStake', value: amount }
   flow.$patch({ approveKind: 'stake', approveFrom: 'stake', lastStakeLuna: amount, lastStakeAdd: !isNew })
   const { id, done } = startOp('stake', req)
+  release()
   flow.approveOpId = id
   go('approve')
   // Success as soon as it is sent: Home shows "Confirming your stake" until it is in a block.
@@ -118,17 +160,19 @@ export async function stakeLive() {
     })
     return
   }
-  if (op.phase === 'rejected') { back('stake'); ui.showToast('You cancelled. Nothing was staked.', { action: 'Try again', fn: stakeLive }) }
+  if (op.phase === 'rejected') { back('stake'); ui.showToast('You cancelled. Nothing was staked.', { action: 'Try again', fn: () => { void stakeLive() } }) }
   else fail(op.phase === 'failed' ? 'chainFailed' : 'notSent', 'stake')
 }
 
 // ---------- approvals that wait for the block (stop, undo, switch) ----------
 
-async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: OpFlow, req: SendRequest, meta: Op['meta'], onDone: () => void, cancelText: string) {
+async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: OpFlow, req: SendRequest, meta: Op['meta'], onDone: () => void, cancelText: string, release: () => void) {
   const flow = useFlow(), ui = useUi(), nav = useNav()
+  if (useOps().active.some(o => o.flow === opFlow)) return ui.showToast('That\'s still confirming. Nothing else to do.')
   const from = nav.screen === 'approve' ? 'pool' : (nav.screen ?? 'pool')
   flow.$patch({ approveKind: kind, approveFrom: from })
   const { id, done } = startOp(opFlow, req, meta)
+  release()
   flow.approveOpId = id
   go('approve')
   const op = await done
@@ -139,27 +183,31 @@ async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: Op
   else ui.showToast('That didn\'t go through. Nothing was sent.')
 }
 
-export async function stopLive() {
-  const ui = useUi()
+export function stopLive() {
   if (previewBlocked()) return
-  const st = currentStaker()
-  if (!st || st.balance === 0) return ui.showToast('Nothing is earning right now.')
-  await approveAndConfirm('unstake', 'unstake', { kind: 'setActive', value: 0 }, undefined, () => {
-    go('pool')
-    ui.showToast('Unstaking started. Nothing else to do.')
-  }, 'You cancelled. You\'re still earning.')
+  return withLock('stop', async (release) => {
+    const ui = useUi()
+    const st = currentStaker()
+    if (!st || st.balance === 0) return ui.showToast('Nothing is earning right now.')
+    await approveAndConfirm('unstake', 'unstake', { kind: 'setActive', value: 0 }, undefined, () => {
+      go('pool')
+      ui.showToast('Unstaking started. Nothing else to do.')
+    }, 'You cancelled. You\'re still earning.', release)
+  })
 }
 
-export async function undoLive() {
-  const ui = useUi()
+export function undoLive() {
   if (previewBlocked()) return
-  const st = currentStaker()
-  if (!st || st.inactiveBalance === 0) return ui.showToast('There\'s nothing to reactivate.')
-  const all = st.balance + st.inactiveBalance
-  await approveAndConfirm('keep', 'keep', { kind: 'setActive', value: all }, undefined, () => {
-    go(useNav().screen === 'home' ? 'home' : 'pool')
-    ui.showToast('You\'re earning again. Nothing was unstaked.')
-  }, 'You cancelled. Unstaking continues.')
+  return withLock('undo', async (release) => {
+    const ui = useUi()
+    const st = currentStaker()
+    if (!st || st.inactiveBalance === 0) return ui.showToast('There\'s nothing to reactivate.')
+    const all = st.balance + st.inactiveBalance
+    await approveAndConfirm('keep', 'keep', { kind: 'setActive', value: all }, undefined, () => {
+      go(useNav().screen === 'home' ? 'home' : 'pool')
+      ui.showToast('You\'re earning again. Nothing was unstaked.')
+    }, 'You cancelled. Unstaking continues.', release)
+  })
 }
 
 /**
@@ -167,9 +215,13 @@ export async function undoLive() {
  * is active and the inactive stake is released (staker.rs update_staker).
  * Then one update transaction moves it and reactivates everything.
  */
-export async function switchLive() {
-  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
+export function switchLive() {
   if (previewBlocked()) return
+  return withLock('switch', switchLocked)
+}
+
+async function switchLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
   const st = currentStaker()
   const target = data.pool(flow.poolPick)
   if (!st) return go('stake')
@@ -185,7 +237,7 @@ export async function switchLive() {
   await approveAndConfirm('switch', 'switch', { kind: 'updateStaker', value: 0, newDelegation: target.validator }, { from: st.delegation, effectiveAt }, () => {
     go('pool')
     ui.showToast(`Switch to ${target.name} started. Nothing else to do.`)
-  }, 'You cancelled. Nothing changed.')
+  }, 'You cancelled. Nothing changed.', release)
 }
 
 /** Hours until stake stopped now would be released (for the switch sheet). */
@@ -267,19 +319,22 @@ export function syncRunSteps() {
   if (!withdrawing && flow.wPhase === 'running' && !busy(flow.wSteps)) { flow.wPhase = 'review'; persistRun() }
 }
 
-function persistRun() {
-  const flow = useFlow(), addr = me()
-  if (!addr) return
-  prefSet('run:' + addr.replace(/\s/g, ''), JSON.stringify({ runPhase: flow.runPhase, doneMode: flow.doneMode, steps: flow.steps, runAmountLuna: flow.runAmountLuna, wSteps: flow.wSteps, wPhase: flow.wPhase }))
+/** Dry-run and real runs are stored apart, so one can never be resumed or retried as the other. */
+const runKey = () => 'run:' + me().replace(/\s/g, '') + (useWallet().isDry ? ':dry' : '')
+
+export function persistRun() {
+  const flow = useFlow()
+  if (!me()) return
+  prefSet(runKey(), JSON.stringify({ runPhase: flow.runPhase, doneMode: flow.doneMode, steps: flow.steps, runAmountLuna: flow.runAmountLuna, wSteps: flow.wSteps, wPhase: flow.wPhase, runDry: flow.runDry }))
 }
 
 /** After a restart: bring back an unfinished run so it resumes checking (never re-sends). */
 export function restoreRun() {
   const flow = useFlow(), ops = useOps()
   try {
-    const r = JSON.parse(prefGet('run:' + me().replace(/\s/g, '')) || 'null')
-    if (!r) return
-    flow.$patch({ runPhase: r.runPhase, doneMode: r.doneMode, steps: r.steps, runAmountLuna: r.runAmountLuna, wSteps: r.wSteps || [], wPhase: r.wPhase || 'review' })
+    const r = JSON.parse(prefGet(runKey()) || 'null')
+    if (!r) { flow.$patch({ runPhase: 'review', steps: [], wSteps: [], wPhase: 'review', runDry: undefined }); return }
+    flow.$patch({ runPhase: r.runPhase, doneMode: r.doneMode, steps: r.steps, runAmountLuna: r.runAmountLuna, wSteps: r.wSteps || [], wPhase: r.wPhase || 'review', runDry: r.runDry })
     syncRunSteps()
     // Steps that never started stay unsent: the run ends as partial with Retry.
     const finish = (list: RunStep[]) => list.map(s => (s.st === 'pending' || s.st === 'waiting') && !(s.opId && ops.byId(s.opId) && !TERMINAL.includes(ops.byId(s.opId)!.phase)) ? { ...s, st: 'skipped' as StepState } : s)
@@ -301,9 +356,13 @@ function setStep(i: number, patch: Partial<RunStep>, key: 'steps' | 'wSteps' = '
 }
 
 /** Hold to run my plan. */
-export async function runPlanLive() {
-  const flow = useFlow(), account = useAccount(), ui = useUi(), ops = useOps(), plan = usePlan()
+export function runPlanLive() {
   if (previewBlocked()) return
+  return withLock('run', runLocked)
+}
+
+async function runLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), ui = useUi(), ops = useOps(), plan = usePlan()
   if (flow.runPhase === 'running' || ops.active.some(o => o.flow === 'run')) return ui.showToast('Your plan is already running.')
   if (plan.planStartedAt == null) return ui.showToast('Save your plan first.')
   if (account.readyLuna > 0 && account.readyLuna < plan.minReadyLuna) return ui.showToast(`Your plan runs once ${minLabel(plan.minReadyLuna)} NIM is ready.`)
@@ -318,10 +377,11 @@ export async function runPlanLive() {
   const runId = crypto.randomUUID()
   const steps = planned.map(s => ({ ...s, runId }))
   flow.$patch({
-    runPhase: 'running', doneMode: 'full', steps, runAmountLuna: amount, runNote: note,
+    runPhase: 'running', doneMode: 'full', steps, runAmountLuna: amount, runNote: note, runDry: useWallet().isDry,
     runCapped: capped ? `Your wallet can spend ${NIM(spendable(bal))} NIM after a small fee reserve, so this run shares ${NIM(amount)} NIM.` : '',
   })
   persistRun()
+  release()
   await processSteps(0)
 }
 
@@ -381,17 +441,34 @@ function finishRunLive() {
 }
 
 /** Retry only what didn't go out (failed, skipped, cancelled). Amounts stay as planned. */
-export async function retryRunLive() {
-  const flow = useFlow(), ui = useUi()
+export function retryRunLive() {
   if (previewBlocked()) return
+  return withLock('retry', retryLocked)
+}
+
+/** Dry run or real for a stored run; runs saved before this was stored use their ops' mode. */
+function runWasDry(): boolean | undefined {
+  const flow = useFlow(), ops = useOps()
+  if (flow.runDry !== undefined) return flow.runDry
+  const op = flow.steps.map(s => s.opId && ops.byId(s.opId)).find(Boolean)
+  return op ? op.dry : undefined
+}
+
+async function retryLocked(release: () => void) {
+  const flow = useFlow(), ui = useUi()
+  if (flow.runPhase === 'running' && flow.steps.some(s => s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming')) return ui.showToast('Your plan is already running.')
+  const wasDry = runWasDry()
+  if (wasDry === undefined) return ui.showToast('This run can\'t be retried. Close it and run your plan again.')
+  if (wasDry !== useWallet().isDry) return ui.showToast(wasDry ? 'That was a dry run. Turn dry run back on to retry it, or run your plan again.' : 'That was a real run. Turn dry run off to retry it.')
   const todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled')
   if (!todo.length) return
   const need = todo.reduce((a, { s }) => a + (s.type === 'keep' ? 0 : s.luna ?? 0), 0)
   const bal = await freshBalanceOrToast()
   if (bal == null) return
   if (need > spendable(bal)) return ui.openSheet('fees')
-  flow.$patch({ runPhase: 'running', doneMode: 'full', steps: flow.steps.map(s => (s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled') ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
+  flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry, steps: flow.steps.map(s => (s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled') ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
   persistRun()
+  release()
   await processSteps(todo[0].i)
 }
 
@@ -453,7 +530,10 @@ async function walkWithdraw() {
 /** Clear finished run/withdraw state when leaving them. */
 export function clearFinished() {
   const flow = useFlow()
-  if (flow.runPhase === 'done') flow.$patch({ runPhase: 'review', steps: [] })
+  // A run stopped by a cancel (nothing in flight) ends here too, so it never stays "running".
+  const busy = flow.steps.some(s => s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming')
+  const stuck = flow.runPhase === 'running' && !processing && !busy && flow.steps.some(s => s.st === 'cancelled')
+  if (flow.runPhase === 'done' || stuck) flow.$patch({ runPhase: 'review', steps: [], runDry: undefined })
   if (flow.wPhase === 'done') flow.$patch({ wPhase: 'review', wSteps: [] })
   persistRun()
 }
