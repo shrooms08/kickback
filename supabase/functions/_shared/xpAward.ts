@@ -3,7 +3,7 @@
 import { db } from './db.ts'
 import { getStaker, rpcFor } from './chain.ts'
 import type { Net } from './chain.ts'
-import { XP, dailyStakeXp, daySlot, questProgress, runQualifies, seasonOf, utcDay } from './xp.ts'
+import { INVITE_KEEP_DAYS, XP, dailyStakeXp, daySlot, inviteStakeKept, questProgress, runQualifies, seasonOf, utcDay } from './xp.ts'
 import { countedRuns, weekKey } from './season.ts'
 
 const H = 3600e3
@@ -38,8 +38,8 @@ export async function snapshotStake(address: string, network: Net, now = Date.no
 
 interface ShareRow { id: string, run_id: string | null, slice_type: string, amount_luna: number, tx_hash: string | null, block_at: string | null, created_at: string }
 
-/** Invitees must keep a real stake before the inviter earns: 3 daily snapshots of 10+ NIM. */
-const INVITE_MIN_DAYS = 3, INVITE_MIN_LUNA = 1_000_000, INVITES_PER_SEASON = 10
+/** Invitees must keep a real stake before the inviter earns: 10+ NIM every day for 7 days after the claim. */
+const INVITE_MIN_LUNA = 1_000_000, INVITES_PER_SEASON = 10
 /** The weekly "keep your stake" quest needs at least 1 NIM active. */
 const KEEP_MIN_LUNA = 100_000
 /** A share earns XP only if it was reported within a day of its tx (no back-filling old transfers). */
@@ -102,14 +102,20 @@ export async function awardFromData(address: string, network: Net, now = Date.no
         if (slot) await give({ source, ref: `${day}#${slot}`, proof: r.proof, amount })
       }
     }
-    // Invites credited this season whose invitee kept a real stake for 3 days; at most 10 a season.
-    const credited = must(await db.from('referrals').select('invitee, credited_at').eq('network', network).eq('inviter', address).not('credited_at', 'is', null).order('credited_at')) as Array<{ invitee: string, credited_at: string }>
+    // Invites credited this season whose invitee kept a real stake on each of the 7 days after the
+    // claim and still has it: awarded on the first read after that (once: the ledger is unique per
+    // invitee). At most 10 a season.
+    const credited = must(await db.from('referrals').select('invitee, claimed_at, credited_at').eq('network', network).eq('inviter', address).not('credited_at', 'is', null).order('credited_at')) as Array<{ invitee: string, claimed_at: string, credited_at: string }>
     let granted = ledger.filter(l => l.source === 'invite').length
     for (const c of credited) {
       if (granted >= INVITES_PER_SEASON) break
-      if (Date.parse(c.credited_at) < seasonStart || has.has(`invite:${c.invitee}`)) continue
-      const { count } = await db.from('stake_snapshots').select('day', { count: 'exact', head: true }).eq('address', c.invitee).eq('network', network).gte('day', s.startsAt.slice(0, 10)).gte('active_luna', INVITE_MIN_LUNA)
-      if ((count ?? 0) < INVITE_MIN_DAYS) continue
+      const claimedAt = Date.parse(c.claimed_at)
+      if (Date.parse(c.credited_at) < seasonStart || has.has(`invite:${c.invitee}`) || now < claimedAt + INVITE_KEEP_DAYS * 24 * H) continue
+      const snaps = () => db.from('stake_snapshots').select('day, active_luna').eq('address', c.invitee).eq('network', network).gt('day', utcDay(claimedAt)).then(must) as Promise<Array<{ day: string, active_luna: number }>>
+      let kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
+      // The week is done but today's stake isn't known yet: take today's snapshot (one RPC read).
+      if (kept === 'wait' && (await snapshotStake(c.invitee, network, now)).ok) kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
+      if (kept !== 'yes') continue
       if (await give({ source: 'invite', ref: c.invitee, amount: XP.invite })) granted++
     }
   }

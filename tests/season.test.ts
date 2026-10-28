@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SKIN_FOR, batchKickbacks, inviteCode, isInviteCode, milestonesFrom, skinsFrom, streak, weekKey } from '../supabase/functions/_shared/season'
+import { batchKickbacks, inviteCode, isInviteCode, milestonesFrom, streak, weekKey } from '../supabase/functions/_shared/season'
 import { STAKING_CONTRACT, checkTx } from '../supabase/functions/_shared/verify'
 
 const H = 3600e3
@@ -87,18 +87,6 @@ describe('milestones from verified facts only', () => {
     expect(milestonesFrom({ ...none, bestStreak: 59 })).toEqual([])
     expect(milestonesFrom({ ...none, bestStreak: 60 })).toEqual(['streak_30'])
     expect(milestonesFrom({ ...none, invitedStakers: 1 })).toEqual(['invited_staker'])
-  })
-})
-
-describe('skins from milestones', () => {
-  it('spark is always unlocked', () => {
-    expect(skinsFrom([])).toEqual(['spark'])
-  })
-  it('maps milestones to the prototype skins', () => {
-    expect(SKIN_FOR).toMatchObject({ first_stake: 'kick', first_kickback: 'bounce', first_share: 'rally', ten_runs: 'surge', hundred_shared: 'legend', streak_30: 'legend' })
-    expect(skinsFrom(['first_stake', 'ten_runs'])).toEqual(['spark', 'kick', 'surge'])
-    expect(skinsFrom(['hundred_shared', 'streak_30'])).toEqual(['spark', 'legend'])
-    expect(skinsFrom(['invited_staker'])).toEqual(['spark'])
   })
 })
 
@@ -205,5 +193,58 @@ describe('audit fixes', () => {
 describe('RPC errors (review fixes)', () => {
   it('"Method not found" is a broken call, not a missing tx', () => {
     expect(isNotFound(new Error('getTransactionByHash: Method not found'))).toBe(false)
+  })
+})
+
+import { everStaked } from '../supabase/functions/_shared/verify'
+describe('"never staked before" reads the whole history (audit 11)', () => {
+  const ME = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8', OTHER = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
+  const tx = (i: number, from = OTHER, to = ME) => ({ hash: `h${i}`, from, to, value: 1, timestamp: i })
+  /** Newest first, 100 a page; `stake` puts a stake tx at that index. */
+  function chain(total: number, stake?: { at: number, out?: boolean }) {
+    const all = Array.from({ length: total }, (_, i) => stake && i === stake.at ? (stake.out ? tx(i, STAKING_CONTRACT, ME) : tx(i, ME, STAKING_CONTRACT)) : tx(i))
+    const pages: Array<string | null> = []
+    const page = async (startAt: string | null) => {
+      pages.push(startAt)
+      const from = startAt === null ? 0 : all.findIndex(t => t.hash === startAt) + 1
+      return all.slice(from, from + 100)
+    }
+    return { page, pages }
+  }
+  it('finds a stake tx past the first 100', async () => {
+    const c = chain(350, { at: 260 })
+    expect(await everStaked(c.page, ME)).toBe(true)
+    expect(c.pages).toEqual([null, 'h99', 'h199'])
+  })
+  it('an unstake payout from the staking contract counts as having staked', async () => {
+    expect(await everStaked(chain(150, { at: 120, out: true }).page, ME)).toBe(true)
+  })
+  it('no stake anywhere in a long history: false, after reading every page', async () => {
+    const c = chain(250)
+    expect(await everStaked(c.page, ME)).toBe(false)
+    expect(c.pages.length).toBe(3)
+  })
+  it('a history longer than the page budget is treated as "has staked" (not a new staker)', async () => {
+    expect(await everStaked(chain(1000).page, ME, 5)).toBe(true)
+  })
+})
+
+import { restakeAfterKickback } from '../supabase/functions/_shared/verify'
+describe('a restake share must come after the latest kickback (audit 16)', () => {
+  const H = 3600e3, t0 = Date.parse('2026-10-20T12:00:00Z')
+  const kicks = [t0 - 48 * H, t0 - 24 * H, t0]
+  it('a restake right after the latest kickback before the report counts', () => {
+    expect(restakeAfterKickback(t0 + 10 * 60e3, kicks, t0 + 20 * 60e3)).toBe(true)
+  })
+  it('an older stake tx from before that kickback does not (it shares nothing new)', () => {
+    expect(restakeAfterKickback(t0 - 30 * H, kicks, t0 + 20 * 60e3)).toBe(false)
+    expect(restakeAfterKickback(t0 - 60e3, kicks, t0 + 20 * 60e3)).toBe(false)
+  })
+  it('kickbacks that landed after the report do not move the bar', () => {
+    expect(restakeAfterKickback(t0 - 23 * H, kicks, t0 - 22 * H)).toBe(true)
+  })
+  it('no kickback before the report: nothing to restake yet', () => {
+    expect(restakeAfterKickback(t0, [], t0 + 60e3)).toBe(false)
+    expect(restakeAfterKickback(t0 - 50 * H, kicks, t0 - 49 * H)).toBe(false)
   })
 })

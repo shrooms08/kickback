@@ -1,5 +1,6 @@
 // season: Season 1 for the signed-in wallet, computed here from verified data only.
-//   GET                -> { season, code, milestones, unlocked, skin, streak, invites, chainOk }
+//   GET                -> { season, code, milestones, unlocked, skin, streak, invites, kickbacks, chainOk }
+//                         kickbacks: [{ hash, at (ms), luna }] since the plan started, newest first (max 2000)
 //   POST { skin }      -> apply an unlocked Stack skin
 //   POST { ref }       -> claim an invite code (once per wallet; not your own)
 // Milestones come from the chain (stake, kickbacks from a direct pool's reward address) and from
@@ -14,9 +15,10 @@ import { verifyShare } from '../_shared/proofs.ts'
 import type { ShareRow } from '../_shared/proofs.ts'
 import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, streak } from '../_shared/season.ts'
 import type { Skin } from '../_shared/season.ts'
-import { STAKING_CONTRACT } from '../_shared/verify.ts'
+import { STAKING_CONTRACT, everStaked } from '../_shared/verify.ts'
 import { TIERS, XP, seasonOf, tierInfo } from '../_shared/xp.ts'
 import { awardFromData, seasonXp, snapshotStake } from '../_shared/xpAward.ts'
+import { TtlCache } from '../_shared/rpcProxy.ts'
 
 const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
@@ -98,7 +100,8 @@ async function recheckShares(s: Session) {
   for (const r of rows) await verifyShare(rpcFor(s.network), r)
 }
 
-const cachedQuests = new Map<string, { quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>()
+// Quests from the last award run per wallet: kept 10 minutes, at most 5,000 wallets per isolate.
+const cachedQuests = new TtlCache<{ quests: Awaited<ReturnType<typeof awardFromData>>['quests'] }>(10 * 60_000, 5000)
 const key = (s: Session) => `${s.network}:${s.address}`
 
 async function getSeason(s: Session) {
@@ -120,6 +123,10 @@ async function getSeason(s: Session) {
   const user = must(userR) as { skin: Skin } | null
   const invites = must(await db.from('referrals').select('credited_at').eq('network', s.network).eq('inviter', s.address)) as Array<{ credited_at: string | null }>
   const plan = must(await db.from('plans').select('plan_started_at, first_seen_at').eq('address', s.address).eq('network', s.network).maybeSingle()) as { plan_started_at: string | null, first_seen_at: string } | null
+  // The kickbacks since the plan started, for the app's Ready to share (it keeps only 30 days itself).
+  const sincePlan = plan?.plan_started_at
+    ? must(await db.from('kickbacks_seen').select('hash, at, luna').eq('address', s.address).eq('network', s.network).gte('at', plan.plan_started_at).order('at', { ascending: false }).limit(2000)) as Array<{ hash: string, at: string, luna: number }>
+    : []
   // Shares count only after the plan started, and a run only when a kickback landed since the last
   // counted run: random transfers to a contact, or many tiny runs, don't add up to anything.
   const since = plan?.plan_started_at ? Math.max(Date.parse(plan.plan_started_at), Date.parse(plan.first_seen_at)) : Infinity
@@ -150,7 +157,7 @@ async function getSeason(s: Session) {
   const season = seasonOf()
   // Award work runs at most once a minute per wallet; in between, quests are read from the last run.
   if (!fresh) await snapshotStake(s.address, s.network).catch(() => null)
-  const { quests } = fresh && cachedQuests.has(key(s)) ? cachedQuests.get(key(s))! : await awardFromData(s.address, s.network)
+  const { quests } = (fresh && cachedQuests.get(key(s))) || await awardFromData(s.address, s.network)
   cachedQuests.set(key(s), { quests })
   const xp = await seasonXp(s.address, s.network, season.id)
   const tier = tierInfo(xp)
@@ -172,6 +179,7 @@ async function getSeason(s: Session) {
     streak: st,
     facts: { runs: facts.runs, sharedLuna: facts.sharedLuna, kickbacks: facts.kickbacks },
     invites: { claimed: invites.length, staked: facts.invitedStakers },
+    kickbacks: sincePlan.map(k => ({ hash: k.hash, at: Date.parse(k.at), luna: Number(k.luna) })),
     chainOk,
   }
 }
@@ -195,13 +203,19 @@ async function post(s: Session, body: any) {
     const owner = must(await db.from('invite_codes').select('address').eq('network', s.network).eq('code', code).maybeSingle()) as { address: string } | null
     if (!owner) return { status: 400, body: { error: 'no such invite code' } }
     if (norm(owner.address) === norm(s.address)) return { status: 400, body: { error: 'that is your own invite code' } }
-    // "Had a stake" = staked now, or ever sent a stake (an unstaked old staker doesn't count as new).
-    let had: boolean
-    try {
-      const rpc = rpcFor(s.network)
-      had = hasStake(await getStaker(rpc, s.address)) || (await txPage(rpc, s.address, null)).some(t => norm(t.from) === norm(s.address) && norm(t.to) === norm(STAKING_CONTRACT))
+    // "Had a stake" = the server ever saw one (a stake snapshot, the scan's staked flag, a verified
+    // stake), staked now, or anywhere in its whole history (an unstaked old staker isn't new).
+    const own = (table: string) => db.from(table).select('address', { count: 'exact', head: true }).eq('address', s.address).eq('network', s.network)
+    const [snapR, scanR, evR] = await Promise.all([own('stake_snapshots').gt('active_luna', 0), own('chain_scan').eq('staked', true), own('events').eq('verified', true)])
+    for (const r of [snapR, scanR, evR]) if (r.error) throw r.error
+    let had = !!(snapR.count || scanR.count || evR.count)
+    if (!had) {
+      try {
+        const rpc = rpcFor(s.network)
+        had = hasStake(await getStaker(rpc, s.address)) || await everStaked(startAt => txPage(rpc, s.address, startAt), s.address)
+      }
+      catch { return { status: 503, body: { error: 'could not check the chain, try again' } } }
     }
-    catch { return { status: 503, body: { error: 'could not check the chain, try again' } } }
     const { error } = await db.from('referrals').insert({ invitee: s.address, network: s.network, inviter: owner.address, code, had_stake_at_claim: had })
     if (error) {
       if (error.code === '23505') return { status: 409, body: { error: 'this wallet already has an inviter' } }

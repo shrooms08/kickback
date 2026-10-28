@@ -16,6 +16,32 @@ export function dailyStakeXp(activeNim: number): number {
 
 export const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10)
 
+/** Invite XP waits until the invitee kept a stake on each of the 7 UTC days after the claim day. */
+export const INVITE_KEEP_DAYS = 7
+const DAY_MS = 864e5
+
+/**
+ * Has an invitee kept a real stake (daily snapshots of at least minLuna) for the 7 days after
+ * claiming the code, and still has it today? 'wait' = not yet (or not today), 'never' = a day of
+ * that week was below the minimum or more than one day has no snapshot (stake before the claim
+ * never counts). One missing day is tolerated (a cron outage).
+ */
+export function inviteStakeKept(claimedAt: number, now: number, snaps: Array<{ day: string, active_luna: number }>, minLuna: number): 'wait' | 'yes' | 'never' {
+  if (now < claimedAt + INVITE_KEEP_DAYS * DAY_MS) return 'wait'
+  const byDay = new Map(snaps.map(x => [x.day, Number(x.active_luna)]))
+  const today = utcDay(now)
+  let held = 0
+  for (let i = 1; i <= INVITE_KEEP_DAYS; i++) {
+    const day = utcDay(claimedAt + i * DAY_MS), v = byDay.get(day)
+    if (v === undefined) { if (day === today) return 'wait'; continue }
+    if (v < minLuna) return 'never'
+    held++
+  }
+  if (held < INVITE_KEEP_DAYS - 1) return 'never'
+  const kept = byDay.get(today)
+  return kept !== undefined && kept >= minLuna ? 'yes' : 'wait'
+}
+
 /** Which of the day's two run slots the next qualifying run takes (null = cap reached). */
 export function daySlot(alreadyCounted: number): 1 | 2 | null {
   return alreadyCounted === 0 ? 1 : alreadyCounted === 1 ? 2 : null

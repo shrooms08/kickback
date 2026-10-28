@@ -4,7 +4,7 @@ import { db } from './db.ts'
 import { getTx } from './chain.ts'
 import type { Net } from './chain.ts'
 import type { Rpc } from './payouts.ts'
-import { STAKING_CONTRACT, checkTx } from './verify.ts'
+import { STAKING_CONTRACT, checkTx, restakeAfterKickback } from './verify.ts'
 
 export interface ShareRow { id: string, address: string, network: Net, amount_luna: number, slice_type: 'send' | 'restake' | 'keep', tx_hash: string | null, status: string }
 
@@ -16,6 +16,21 @@ async function recipientsFor(row: ShareRow): Promise<string[]> {
   return (data ?? []).map((c: { contact_address: string }) => c.contact_address)
 }
 
+/** When the app reported the share (the server's own time). */
+async function reportedAt(row: ShareRow): Promise<number> {
+  const { data, error } = await db.from('shares').select('created_at').eq('id', row.id).maybeSingle()
+  if (error) throw error
+  return data ? Date.parse(data.created_at) : Date.now()
+}
+
+/** The wallet's latest known kickback (found on chain by the season scan), as a list of 0 or 1 times. */
+async function latestKickback(row: ShareRow): Promise<number[]> {
+  const { data, error } = await db.from('kickbacks_seen').select('at').eq('address', row.address).eq('network', row.network)
+    .lte('at', new Date(await reportedAt(row)).toISOString()).order('at', { ascending: false }).limit(1)
+  if (error) throw error
+  return (data ?? []).map((k: { at: string }) => Date.parse(k.at))
+}
+
 /** true = verified now; false = not on chain (yet) or doesn't match; throws only on DB errors. */
 export async function verifyShare(rpc: Rpc, row: ShareRow): Promise<boolean> {
   if (!row.tx_hash || row.slice_type === 'keep' || row.status !== 'confirmed') return false
@@ -24,7 +39,8 @@ export async function verifyShare(rpc: Rpc, row: ShareRow): Promise<boolean> {
   catch { return false } // RPC trouble: try again later
   // A stake already counted as a verified stake event can't also be a restake share.
   const { data: asStake } = await db.from('events').select('id').eq('network', row.network).eq('tx_hash', row.tx_hash).eq('verified', true).limit(1)
-  const ok = !asStake?.length && checkTx(tx, { owner: row.address, value: Number(row.amount_luna), to: await recipientsFor(row) })
+  let ok = !asStake?.length && checkTx(tx, { owner: row.address, value: Number(row.amount_luna), to: await recipientsFor(row) })
+  if (ok && row.slice_type === 'restake') ok = restakeAfterKickback(tx!.timestamp, await latestKickback(row), await reportedAt(row))
   const now = new Date().toISOString()
   const patch = ok ? { verified: true, block_at: new Date(tx!.timestamp).toISOString(), checked_at: now } : { checked_at: now }
   // Only the row exactly as checked may be marked verified: if the app changed it meanwhile,

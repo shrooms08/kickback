@@ -1,9 +1,12 @@
 // sync: the signed-in user's plan, contacts and processed shares.
 //   GET                         -> { plan, contacts, shares }
-//   PUT  { contacts?, plan? }   -> contacts is the full list (upserted; ones left out are removed),
-//                                 then the plan (validated against them)
+//   PUT  { contacts?, plan? }   -> contacts is the full list (upserted; ones left out are removed,
+//                                 in one transaction), then the plan (validated against them)
 //   POST { share }              -> records (or updates the status of) a processed share
-//   POST { event, network? }    -> records an event; without a session the address is left empty
+//   POST { event, network? }    -> records an event; without a session the address is left empty.
+//                                 Rate limited in Postgres per hour: SYNC_ANON_EVENTS_IP_MAX
+//                                 without a session per caller IP (default 20), and
+//                                 SYNC_EVENTS_ADDRESS_MAX per signed-in wallet (default 120)
 // Every write is validated here: slices total 100, contact addresses pass the Nimiq checksum
 // and aren't the user's own, Luna amounts are positive whole numbers.
 import { db } from '../_shared/db.ts'
@@ -13,9 +16,13 @@ import type { Session } from '../_shared/session.ts'
 import { ValidationError, positiveLuna, validateContact, validateEvent, validateNetwork, validateShare, validateSlices } from '../_shared/validate.ts'
 import { rpcFor } from '../_shared/chain.ts'
 import { verifyShare, verifyStakeEvent } from '../_shared/proofs.ts'
+import { allowHit, limitFromEnv } from '../_shared/rateLimit.ts'
+import { clientIp } from '../_shared/rpcProxy.ts'
 
 const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
+const ANON_EVENTS_IP_MAX = limitFromEnv('SYNC_ANON_EVENTS_IP_MAX', 20)
+const EVENTS_ADDRESS_MAX = limitFromEnv('SYNC_EVENTS_ADDRESS_MAX', 120)
 
 async function getAll(s: Session) {
   const own = <T>(q: any): Promise<T> => q.eq('address', s.address).eq('network', s.network).then((r: any) => { if (r.error) throw r.error; return r.data })
@@ -32,18 +39,13 @@ async function put(s: Session, body: any) {
   const own = { address: s.address, network: s.network }
   if (body?.contacts !== undefined) {
     if (!Array.isArray(body.contacts) || body.contacts.length > 50) throw new ValidationError('contacts must be a list of at most 50')
-    const rows = body.contacts.map((c: unknown) => ({ ...validateContact(c, s.address), ...own }))
-    const ids = rows.map((r: { id: string }) => r.id)
-    let del = db.from('contacts').delete().eq('address', s.address).eq('network', s.network)
-    if (ids.length) del = del.not('id', 'in', `(${ids.map((i: string) => `"${i}"`).join(',')})`)
-    const { error: derr } = await del
-    if (derr) throw derr
-    if (rows.length) {
-      const { error } = await db.from('contacts').upsert(rows, { onConflict: 'address,network,id' })
-      if (error) {
-        if (error.code === '23505') throw new ValidationError('that contact address is already saved under another name')
-        throw error
-      }
+    const rows = body.contacts.map((c: unknown) => validateContact(c, s.address))
+    if (new Set(rows.map((r: { id: string }) => r.id)).size !== rows.length) throw new ValidationError('each contact needs its own id')
+    // One transaction: the ones left out are removed and the rest upserted, or nothing changes.
+    const { error } = await db.rpc('kickback_replace_contacts', { p_address: s.address, p_network: s.network, p_contacts: rows })
+    if (error) {
+      if (error.code === '23505') throw new ValidationError('that contact address is already saved under another name')
+      throw error
     }
   }
   if (body?.plan !== undefined) {
@@ -64,7 +66,7 @@ async function put(s: Session, body: any) {
   return getAll(s)
 }
 
-async function post(s: Session | null, body: any) {
+async function post(s: Session | null, body: any, ip: string) {
   if (body?.share !== undefined) {
     if (!s) return { status: 401, body: { error: 'Sign in to back up shares.' } }
     const share = validateShare(body.share)
@@ -90,6 +92,9 @@ async function post(s: Session | null, body: any) {
   if (body?.event !== undefined) {
     const ev = validateEvent(body.event)
     const network = s ? s.network : validateNetwork(body.network)
+    // Anonymous events only feed internal counts: a hard limit per IP. Signed-in ones per wallet.
+    const allowed = s ? await allowHit(`events:addr:${s.network}:${s.address}`, 3600, EVENTS_ADDRESS_MAX) : await allowHit(`events:anon:${ip}`, 3600, ANON_EVENTS_IP_MAX)
+    if (!allowed) return { status: 429, body: { error: 'Too many events. Try again later.' } }
     // Only a signed-in wallet's stake tx can be verified (it must come from that wallet).
     const { data, error } = await db.from('events').insert({ ...ev, tx_hash: s ? ev.tx_hash : null, network, address: s?.address ?? null }).select('id').single()
     if (error) throw error
@@ -113,7 +118,7 @@ Deno.serve(async (req) => {
       return json(await put(session, await readJson(req)), 200, cors)
     }
     if (req.method === 'POST') {
-      const r = await post(session, await readJson(req))
+      const r = await post(session, await readJson(req), clientIp(req.headers))
       return json(r.body, r.status, cors)
     }
     return json({ error: 'GET, PUT or POST' }, 405, cors)

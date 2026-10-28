@@ -51,12 +51,16 @@ describe('endpoint pool copies stay identical', () => {
 
 import { clientIp } from '../supabase/functions/_shared/rpcProxy'
 describe('rpc-proxy hardening (audit)', () => {
-  it('client IP: cf-connecting-ip, then x-real-ip, then the last x-forwarded-for hop (never the first, which the caller sets)', () => {
+  it('client IP: cf-connecting-ip (set by Cloudflare in front of the gateway), then the last x-forwarded-for hop (never the first, which the caller sets)', () => {
     const h = (o: Record<string, string>) => new Headers(o)
     expect(clientIp(h({ 'cf-connecting-ip': '9.9.9.9', 'x-forwarded-for': '1.1.1.1, 2.2.2.2' }))).toBe('9.9.9.9')
-    expect(clientIp(h({ 'x-real-ip': '8.8.8.8', 'x-forwarded-for': '1.1.1.1' }))).toBe('8.8.8.8')
     expect(clientIp(h({ 'x-forwarded-for': '1.1.1.1, 2.2.2.2' }))).toBe('2.2.2.2')
     expect(clientIp(h({}))).toBe('unknown')
+  })
+  it('client IP: x-real-ip is never trusted (a caller can send it)', () => {
+    const h = (o: Record<string, string>) => new Headers(o)
+    expect(clientIp(h({ 'x-real-ip': '8.8.8.8', 'x-forwarded-for': '1.1.1.1' }))).toBe('1.1.1.1')
+    expect(clientIp(h({ 'x-real-ip': '8.8.8.8' }))).toBe('unknown')
   })
   it('flooding with new IPs evicts old windows instead of resetting everyone', () => {
     let t = 0

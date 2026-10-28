@@ -1,9 +1,10 @@
 // RLS check: with only the public anon key, private tables can't be read and nothing can be
-// written; pool_stats is readable. Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY from .env.local.
-// Usage: node e2e/rls-check.mjs
+// written; pool_stats is readable. Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY from .env.local,
+// or from the file named by KICKBACK_ENV_FILE (e.g. one pointing at the local stack).
+// Usage: node e2e/rls-check.mjs   or   KICKBACK_ENV_FILE=/path/to/local.env node e2e/rls-check.mjs
 import { readFileSync } from 'node:fs'
 
-const env = Object.fromEntries(readFileSync(new URL('../.env.local', import.meta.url), 'utf8').split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
+const env = Object.fromEntries(readFileSync(process.env.KICKBACK_ENV_FILE || new URL('../.env.local', import.meta.url), 'utf8').split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
 const URL_ = env.VITE_SUPABASE_URL, KEY = env.VITE_SUPABASE_ANON_KEY
 const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' }
 const results = []
@@ -16,7 +17,7 @@ async function rest(method, path, body) {
 }
 const short = d => JSON.stringify(d).slice(0, 110)
 
-for (const t of ['plans', 'contacts', 'shares', 'users', 'events', 'auth_nonces', 'pool_probes']) {
+for (const t of ['plans', 'contacts', 'shares', 'users', 'events', 'auth_nonces', 'pool_probes', 'rate_limits']) {
   const r = await rest('GET', `${t}?select=*&limit=5`)
   log(`anon cannot read ${t}`, r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0), `HTTP ${r.status} ${short(r.data)}`)
 }
@@ -39,8 +40,9 @@ for (const [name, method, path, body] of writes) {
   const r = await rest(method, path, body)
   log(`anon cannot ${name}`, r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0), `HTTP ${r.status} ${short(r.data)}`)
 }
-for (const fn of ['kickback_stats', 'cron_secret_ok']) {
-  const r = await rest('POST', `rpc/${fn}`, fn === 'cron_secret_ok' ? { p: 'guess' } : {})
+const rpcArgs = { cron_secret_ok: { p: 'guess' }, hit_rate_limit: { p_key: 'rpc:global', p_window_s: 60, p_max: 0 }, kickback_replace_contacts: { p_address: addr, p_network: 'mainnet', p_contacts: [] } }
+for (const fn of ['kickback_stats', 'cron_secret_ok', 'hit_rate_limit', 'kickback_replace_contacts']) {
+  const r = await rest('POST', `rpc/${fn}`, rpcArgs[fn] ?? {})
   log(`anon cannot call ${fn}()`, r.status >= 400, `HTTP ${r.status} ${short(r.data)}`)
 }
 const after = await rest('GET', 'pool_stats?select=name&name=eq.hacked')

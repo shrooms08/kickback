@@ -25,14 +25,14 @@ export function checkProxyRequest(body: unknown): ProxyCheck {
 }
 
 /**
- * The caller's IP: Cloudflare's header, then the gateway's x-real-ip, then the LAST x-forwarded-for
- * hop (added by the proxy in front of us). The first hop is whatever the caller wrote: never trusted.
+ * The caller's IP. On Supabase the gateway sits behind Cloudflare, which sets cf-connecting-ip
+ * itself (a caller's own value is replaced). Without it (local stack), the LAST x-forwarded-for
+ * hop, added by the proxy in front of us. The first hop and x-real-ip can be written by the
+ * caller: never trusted.
  */
 export function clientIp(h: Headers): string {
   const cf = h.get('cf-connecting-ip')?.trim()
   if (cf) return cf
-  const real = h.get('x-real-ip')?.trim()
-  if (real) return real
   const hops = (h.get('x-forwarded-for') ?? '').split(',').map(s => s.trim()).filter(Boolean)
   return hops[hops.length - 1] ?? 'unknown'
 }
