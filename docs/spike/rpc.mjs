@@ -1,5 +1,8 @@
 // Minimal read-only JSON-RPC helper for rpc.nimiqwatch.com.
 // Paces requests and backs off on HTTP 429 using x-ratelimit-reset (unix seconds).
+// The scripts write raw responses to ./data, created here and not committed.
+import { mkdirSync } from 'node:fs'
+mkdirSync('data', { recursive: true })
 export const RPC = process.env.RPC || 'https://rpc.nimiqwatch.com'
 export const stats = { calls: 0, throttled: 0, limits: [] }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
