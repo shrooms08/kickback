@@ -6,6 +6,7 @@ import type { Split } from '../lib/plan'
 import type { LedgerEntry } from '../lib/money'
 import { prefGet, prefSet } from '../lib/cache'
 import { DEFAULT_MIN_READY, MIN_READY_CHOICES } from '../lib/minReady'
+import { uuid } from '../lib/uuid'
 
 /** One slice of a plan, in order. Send slices carry their contact. */
 export type Slice =
@@ -32,14 +33,6 @@ interface Backup { contacts: Contact[], recipient: string | null, savedRecipient
 
 let contactsBackup: Backup | null = null
 
-function newId(): string {
-  try { return crypto.randomUUID() }
-  catch {
-    const h = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0'))
-    h[6] = '4' + h[6][1]; h[8] = ((parseInt(h[8], 16) & 0x3f) | 0x80).toString(16)
-    return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10).join('')}`
-  }
-}
 let lastWritten = ''
 let subscribed = false
 
@@ -141,10 +134,14 @@ export const usePlan = defineStore('plan', {
       subscribed = true
       this.$subscribe(() => this.persist())
     },
-    /** A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones. */
-    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep', runId?: string): LedgerEntry | null {
+    /**
+     * A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones.
+     * `id` (a run step's op id) makes it idempotent: the same id or transaction hash is never recorded twice.
+     */
+    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep', runId?: string, id?: string): LedgerEntry | null {
       if (luna <= 0) return null
-      const entry: LedgerEntry = { id: newId(), luna, at: Date.now(), hash, sliceType, ...(runId ? { runId } : {}), ...(dry ? { dry: true } : {}) }
+      if (this.ledger.some(e => (id && e.id === id) || (hash && e.hash === hash))) return null
+      const entry: LedgerEntry = { id: id ?? uuid(), luna, at: Date.now(), hash, sliceType, ...(runId ? { runId } : {}), ...(dry ? { dry: true } : {}) }
       this.ledger.push(entry)
       this.persist()
       return entry

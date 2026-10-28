@@ -345,7 +345,8 @@ async function walkSteps(from: number) {
     const req: SendRequest = s.type === 'send'
       ? { kind: 'payment', value: s.luna!, recipient: s.recipient!, data: 'Kickback' }
       : { kind: 'addStake', value: s.luna! }
-    const { id, done } = startOp('run', req, { step: i })
+    // The share is recorded by the ops store when this op confirms (also after a restart).
+    const { id, done } = startOp('run', req, { step: i, luna: s.luna!, type: s.type, ...(s.runId ? { runId: s.runId } : {}) })
     setStep(i, { opId: id, st: 'waiting' })
     const op = await untilNot(id, ['approving', 'checking'])
     if (op.phase === 'rejected') {
@@ -357,8 +358,8 @@ async function walkSteps(from: number) {
     }
     if (op.phase === 'confirming' || op.phase === 'confirmed') {
       if (s.type === 'send' || s.type === 'restake') fxStep(s.type)
-      // Recorded as shared once it is in a block; failures stay ready to share.
-      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash, final.dry, s.type === 'send' ? 'send' : 'restake', s.runId); syncRunSteps(); maybeFinish() })
+      // Recorded as shared by the ops store once it is in a block; failures stay ready to share.
+      done.then(() => { syncRunSteps(); maybeFinish() })
     }
     syncRunSteps()
   }

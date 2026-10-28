@@ -4,6 +4,8 @@ import { prefGet, prefSet } from '../lib/cache'
 import { UNKNOWN, findOnChain, send, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
+import { usePlan } from './plan'
+import { isUuid, uuid } from '../lib/uuid'
 
 // Every money action is an "op", persisted per address. If the app is closed
 // mid-flight, reopening resumes *checking* (chain search or inclusion polling)
@@ -34,11 +36,26 @@ export interface Op {
   error?: string
   /** Seconds left in the chain check. */
   checkLeft?: number
-  /** Flow details (e.g. switch: old pool, when it takes effect). */
+  /**
+   * Flow details. Switch: old pool, when it takes effect. Run: step index, `luna`, `type`
+   * (send / restake) and `runId`, so the share is recorded when it settles, even after a restart.
+   */
   meta?: Record<string, string | number>
 }
 
 export const TERMINAL: OpPhase[] = ['confirmed', 'failed', 'rejected', 'not-sent']
+
+/**
+ * A run step in a block is shared: record it in the plan ledger right here, whoever is watching
+ * (the run walking its steps, or a resume after a restart). The op id is the ledger id, so it is
+ * written exactly once.
+ */
+function recordRunShare(op: Op) {
+  const m = op.meta
+  if (op.flow !== 'run' || op.phase !== 'confirmed' || !m || typeof m.luna !== 'number') return
+  const id = isUuid(op.id) ? op.id : String(m.shareId)
+  usePlan().recordShared(m.luna, op.hash, op.dry, m.type === 'restake' ? 'restake' : 'send', typeof m.runId === 'string' ? m.runId : undefined, id)
+}
 const listeners: Array<(op: Op) => void> = []
 /** Called whenever an op reaches confirmed or failed (refresh live data). */
 export function onSettled(fn: (op: Op) => void) { listeners.push(fn) }
@@ -69,7 +86,10 @@ export const useOps = defineStore('ops', {
     patch(id: string, p: Partial<Op>) {
       const op = this.ops.find(o => o.id === id)
       if (!op) return
+      // Ops saved before ids were uuids get a stable share id once.
+      if (op.flow === 'run' && op.meta && !isUuid(op.id) && !op.meta.shareId) op.meta.shareId = uuid()
       Object.assign(op, p)
+      if (p.phase === 'confirmed') recordRunShare(op)
       this.save()
       if (!op.dry) logMoney(op)
       if (p.phase === 'confirmed' || p.phase === 'failed') listeners.forEach(fn => fn(op))
@@ -77,7 +97,7 @@ export const useOps = defineStore('ops', {
 
     /** Run one money action to the end. Resolves when it is terminal (or keeps going in the background if slow). */
     async execute(flow: OpFlow, req: SendRequest, address: string, meta?: Op['meta']): Promise<Op> {
-      const op: Op = { id: 'op' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), flow, req, phase: 'approving', address, dry: useDry().on, startedAt: Date.now(), meta }
+      const op: Op = { id: uuid(), flow, req, phase: 'approving', address, dry: useDry().on, startedAt: Date.now(), meta }
       this.ops.push(op)
       this.save()
       if (!op.dry) logMoney(op)
