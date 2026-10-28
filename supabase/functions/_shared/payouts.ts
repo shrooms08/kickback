@@ -46,8 +46,9 @@ const norm = (a: string) => a.replace(/\s+/g, '').toUpperCase()
  * failed one is retried after 60 s); a JSON-RPC error is an answer and is thrown as before.
  * `retry429: false` (user-facing reads): a 429 fails over at once instead of sleeping.
  */
-export function createRpc(urls: string | string[], budget = 14, opts: { retry429?: boolean, rest?: string | null } = {}) {
+export function createRpc(urls: string | string[], budget = 14, opts: { retry429?: boolean, rest?: string | null, maxWaitMs?: number, timeoutMs?: number } = {}) {
   const retry429 = opts.retry429 ?? true
+  const timeoutMs = opts.timeoutMs ?? 8000
   const pool = new EndpointPool(Array.isArray(urls) ? urls : [urls], { rest: opts.rest ?? null })
   const buckets = new Map<string, { tokens: number, last: number }>()
   let units = 0, calls = 0
@@ -60,7 +61,10 @@ export function createRpc(urls: string | string[], budget = 14, opts: { retry429
       b.tokens = Math.min(budget, b.tokens + (now - b.last) * budget / 10_000)
       b.last = now
       if (b.tokens >= cost) { b.tokens -= cost; return }
-      await sleep(Math.ceil((cost - b.tokens) * 10_000 / budget))
+      const wait = Math.ceil((cost - b.tokens) * 10_000 / budget)
+      // A shared server client (the proxy) answers "busy" instead of queueing callers forever.
+      if (opts.maxWaitMs != null && wait > opts.maxWaitMs) throw new Error('rpc budget busy')
+      await sleep(wait)
     }
   }
   /** The node's reply as it is ({ result } or { error }), from the first endpoint that answers. */
@@ -75,10 +79,10 @@ export function createRpc(urls: string | string[], budget = 14, opts: { retry429
         await take(ep.url, 1)
         calls++; units++
         let res: Response
-        try { res = await fetch(url, { signal: AbortSignal.timeout(8000) }) }
-        catch { pool.markDown(ep.url, 'network'); failed.push(`${ep.url}: network`); continue }
+        try { res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) }) }
+        catch { pool.markDown(ep.url, 'network'); failed.push(`${new URL(ep.url).host}: network`); continue }
         const reply = restResult(method, params, res.status, await res.json().catch(() => null))
-        if (!reply) { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${ep.url}: HTTP ${res.status}`); continue }
+        if (!reply) { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${new URL(ep.url).host}: HTTP ${res.status}`); continue }
         pool.markOk(ep.url, 0)
         return reply as Awaited<ReturnType<typeof raw>>
       }
@@ -86,11 +90,11 @@ export function createRpc(urls: string | string[], budget = 14, opts: { retry429
         await take(ep.url, cost)
         calls++; units += cost
         let res: Response
-        try { res = await fetch(ep.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(8000) }) }
-        catch (e) { pool.markDown(ep.url, (e as Error).name === 'TimeoutError' ? 'timeout' : 'network'); failed.push(`${ep.url}: network`); break }
+        try { res = await fetch(ep.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: calls, method, params }), signal: AbortSignal.timeout(timeoutMs) }) }
+        catch (e) { pool.markDown(ep.url, (e as Error).name === 'TimeoutError' ? 'timeout' : 'network'); failed.push(`${new URL(ep.url).host}: network`); break }
         if (res.status === 429 && retry429 && attempt < 2) { buckets.get(ep.url)!.tokens = 0; await sleep(5000); continue }
         const body = await res.json().catch(() => null)
-        if (classifyFailure({ status: res.status, json: !!body && (body.result !== undefined || body.error !== undefined) }) === 'failover') { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${ep.url}: HTTP ${res.status}`); break }
+        if (classifyFailure({ status: res.status, json: !!body && (body.result !== undefined || body.error !== undefined) }) === 'failover') { pool.markDown(ep.url, `HTTP ${res.status}`); failed.push(`${new URL(ep.url).host}: HTTP ${res.status}`); break }
         pool.markOk(ep.url, 0)
         return body
       }

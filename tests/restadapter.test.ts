@@ -31,7 +31,7 @@ describe('Nimiq.Watch REST as a JSON-RPC fallback: replies', () => {
   it('account type as text; an unknown account is an empty basic one', () => {
     expect(restResult('getAccountByAddress', [ADDR], 200, { address: ADDR, type: 0, balance: 5 })).toEqual({ result: { data: { address: ADDR, type: 'basic', balance: 5 } } })
     expect(restResult('getAccountByAddress', [ADDR], 200, { address: ADDR, type: 1, balance: 5 })!.result!.data).toMatchObject({ type: 'vesting' })
-    expect(restResult('getAccountByAddress', [ADDR], 404, {})).toEqual({ result: { data: { address: ADDR, type: 'basic', balance: 0 } } })
+    expect(restResult('getAccountByAddress', [ADDR], 404, { error: true, statusCode: 404, message: 'Account not found' })).toEqual({ result: { data: { address: ADDR, type: 'basic', balance: 0 } } })
   })
   it('transactions newest first, in the JSON-RPC shape (ms timestamps), cut to max', () => {
     const list = [
@@ -42,7 +42,7 @@ describe('Nimiq.Watch REST as a JSON-RPC fallback: replies', () => {
     expect(r).toEqual([{ hash: 'b', blockNumber: 20, timestamp: 2_000_000, from: 'NQ16 POOL', to: ADDR, value: 6, fee: 0, executionResult: false, recipientData: '4b69', relatedAddresses: [] }])
   })
   it('a missing transaction is the "not found" answer', () => {
-    expect(restResult('getTransactionByHash', ['ab'.repeat(32)], 404, {})).toEqual({ error: { code: -32603, message: 'Internal error', data: `Transaction not found: ${'ab'.repeat(32)}` } })
+    expect(restResult('getTransactionByHash', ['ab'.repeat(32)], 404, { error: true, statusCode: 404, message: 'Transaction not found' })).toEqual({ error: { code: -32603, message: 'Internal error', data: `Transaction not found: ${'ab'.repeat(32)}` } })
   })
   it('head height and block timestamps', () => {
     expect(restResult('getBlockNumber', [], 200, [{ height: 65418141, timestamp: 1 }])).toEqual({ result: { data: 65418141 } })
@@ -58,5 +58,26 @@ describe('Nimiq.Watch REST as a JSON-RPC fallback: replies', () => {
 describe('REST adapter copies stay identical', () => {
   it('src/lib/restAdapter.ts and supabase/functions/_shared/restAdapter.ts', () => {
     expect(readFileSync('src/lib/restAdapter.ts', 'utf8')).toBe(readFileSync('supabase/functions/_shared/restAdapter.ts', 'utf8'))
+  })
+})
+
+describe('REST adapter hardening (audit)', () => {
+  it('a 404 is "not found" only with the API\'s own not-found body; any other 404 is a failure', () => {
+    expect(restResult('getStakerByAddress', [ADDR], 404, '<html>maintenance</html>')).toBeNull()
+    expect(restResult('getStakerByAddress', [ADDR], 404, { error: true, message: 'Staker not found' })!.error!.data).toMatch(/^No staker with address/)
+    expect(restResult('getAccountByAddress', [ADDR], 404, null)).toBeNull()
+    expect(restResult('getTransactionByHash', ['ab'.repeat(32)], 404, { statusCode: 404 })).toBeNull()
+  })
+  it('executionResult is a real boolean or left out; hashes lower case', () => {
+    const base = { block_height: 10, hash: 'AB'.repeat(32), sender_address: 'x', receiver_address: 'y', value: 1, fee: 0, timestamp: 1000, data: '' }
+    const r = restResult('getTransactionByHash', ['ab'.repeat(32)], 200, base)!.result!.data as Record<string, unknown>
+    expect(r.executionResult).toBeUndefined()
+    expect(r.hash).toBe('ab'.repeat(32))
+    expect((restResult('getTransactionByHash', ['ab'.repeat(32)], 200, { ...base, executed: 'yes' })!.result!.data as Record<string, unknown>).executionResult).toBeUndefined()
+  })
+  it('timestamps more than an hour in the future mean the units are wrong: failure', () => {
+    const t = { block_height: 10, hash: 'ab'.repeat(32), sender_address: 'x', receiver_address: 'y', value: 1, fee: 0, executed: true, timestamp: Date.now(), data: '' }
+    expect(restResult('getTransactionByHash', ['ab'.repeat(32)], 200, t)).toBeNull()
+    expect(restResult('getTransactionsByAddress', [ADDR, 10, null], 200, [t])).toBeNull()
   })
 })

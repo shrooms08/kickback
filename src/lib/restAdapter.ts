@@ -29,16 +29,29 @@ type Reply = { result?: { data: unknown }, error?: { code: number, message: stri
 const answer = (data: unknown): Reply => ({ result: { data } })
 const notFound = (data: string): Reply => ({ error: { code: -32603, message: 'Internal error', data } })
 
+/** Timestamps are seconds; anything that lands more than an hour in the future means the units changed. */
+const FUTURE_SLACK_MS = 3600e3
 // deno-lint-ignore no-explicit-any
 function tx(t: any) {
-  return { hash: t.hash, blockNumber: t.block_height, timestamp: Number(t.timestamp) * 1000, from: t.sender_address, to: t.receiver_address, value: t.value, fee: t.fee, executionResult: t.executed, recipientData: t.data, relatedAddresses: [] }
+  return {
+    hash: String(t.hash).toLowerCase(), blockNumber: t.block_height, timestamp: Number(t.timestamp) * 1000,
+    from: t.sender_address, to: t.receiver_address, value: t.value, fee: t.fee,
+    // Only a real boolean: a missing or odd field must never read as "executed".
+    executionResult: typeof t.executed === 'boolean' ? t.executed : undefined,
+    recipientData: t.data, relatedAddresses: [],
+  }
 }
+const sane = (x: { timestamp: number }) => Number.isFinite(x.timestamp) && x.timestamp <= Date.now() + FUTURE_SLACK_MS
+// deno-lint-ignore no-explicit-any
+const apiNotFound = (body: any) => !!body && typeof body === 'object' && body.error === true && /not found/i.test(String(body.message ?? ''))
 
 // deno-lint-ignore no-explicit-any
 export function restResult(method: string, params: unknown[], status: number, body: any): Reply {
   if (status >= 500 || status === 429) return null
   const a = compact(params[0])
   if (status === 404) {
+    // Only the API's own "not found" is an answer; any other 404 (moved route, CDN page) is a failure.
+    if (!apiNotFound(body)) return null
     if (method === 'getStakerByAddress') return notFound(`No staker with address: ${spaced(a)}`)
     if (method === 'getTransactionByHash') return notFound(`Transaction not found: ${String(params[0]).toLowerCase()}`)
     if (method === 'getAccountByAddress') return answer({ address: spaced(a), type: 'basic', balance: 0 })
@@ -52,9 +65,11 @@ export function restResult(method: string, params: unknown[], status: number, bo
     case 'getTransactionsByAddress': {
       if (!Array.isArray(body)) return null
       const max = Number(params[1] ?? 500)
-      return answer(body.map(tx).sort((x, y) => y.blockNumber - x.blockNumber).slice(0, max > 0 ? max : 500))
+      const list = body.map(tx)
+      if (!list.every(sane)) return null
+      return answer(list.sort((x, y) => y.blockNumber - x.blockNumber).slice(0, max > 0 ? max : 500))
     }
-    case 'getTransactionByHash': return typeof body.hash === 'string' ? answer(tx(body)) : null
+    case 'getTransactionByHash': { if (typeof body.hash !== 'string') return null; const t = tx(body); return sane(t) ? answer(t) : null }
     case 'getBlockByNumber': return Number.isSafeInteger(body.height) ? answer({ number: body.height, hash: body.hash, timestamp: Number(body.timestamp) * 1000 }) : null
     default: return null
   }

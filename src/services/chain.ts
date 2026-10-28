@@ -2,6 +2,7 @@
 import { rpc, rpcPeek } from './rpc'
 import type { Result } from './rpc'
 import { prefGet, prefSet } from '../lib/cache'
+import { knownReward } from './knownPools'
 import { isTestnet, net } from '../lib/net'
 
 export const COINBASE = 'NQ81 C01N BASE 0000 0000 0000 0000 0000 0000'
@@ -296,23 +297,12 @@ const SEED_PROBES: Record<string, string[]> = {
 
 /**
  * A validator's reward address: from getValidatorByAddress, or, when that can't be read (no
- * JSON-RPC node up; the REST fallback has no validator route), from a known probe staker of a
- * direct pool: it delegates to the validator and is paid from the reward address.
+ * JSON-RPC node up; the REST fallback has no validator route), from the fixed table of known
+ * direct pools. Never guessed from where some staker delegates.
  */
 export async function rewardOf(validator: string): Promise<string | null> {
   try { return (await getValidator(validator)).value.rewardAddress || null }
-  catch { /* try the probes */ }
-  for (const [reward, probes] of Object.entries(SEED_PROBES)) {
-    for (const p of [...probes, ...learnedProbes(reward)]) {
-      try {
-        const st = (await getStaker(p, 24 * H)).value
-        if (st?.delegation && sameAddr(st.delegation, validator)) return spaced(reward)
-        if (st?.delegation) break
-      }
-      catch { /* next probe */ }
-    }
-  }
-  return null
+  catch { return knownReward(validator) }
 }
 
 function learnedProbes(reward: string): string[] {

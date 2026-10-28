@@ -20,18 +20,36 @@ export function checkProxyRequest(body: unknown): ProxyCheck {
     if (!fine) return { ok: false, status: 400, error: 'params must be short strings, numbers, booleans or null' }
   }
   if (b.method === 'getTransactionsByAddress' && Number(params[1] ?? 500) > 100) return { ok: false, status: 400, error: 'at most 100 transactions per page' }
+  if (b.method === 'getBlockByNumber' && params[1] != null && params[1] !== false) return { ok: false, status: 400, error: 'blocks without transaction bodies only' }
   return { ok: true, method: b.method, params, id: b.id ?? 1 }
 }
 
-/** Fixed-window counter per key (IP). */
+/**
+ * The caller's IP: Cloudflare's header, then the gateway's x-real-ip, then the LAST x-forwarded-for
+ * hop (added by the proxy in front of us). The first hop is whatever the caller wrote: never trusted.
+ */
+export function clientIp(h: Headers): string {
+  const cf = h.get('cf-connecting-ip')?.trim()
+  if (cf) return cf
+  const real = h.get('x-real-ip')?.trim()
+  if (real) return real
+  const hops = (h.get('x-forwarded-for') ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  return hops[hops.length - 1] ?? 'unknown'
+}
+
+/** Fixed-window counter per key (IP). When full, expired windows are evicted (never a global reset). */
 export class RateLimiter {
   private hits = new Map<string, { n: number, start: number }>()
-  constructor(private max: number, private windowMs: number, private now: () => number = Date.now) {}
+  constructor(private max: number, private windowMs: number, private now: () => number = Date.now, private maxKeys = 10_000) {}
   allow(key: string): boolean {
     const t = this.now()
     const h = this.hits.get(key)
     if (!h || t - h.start > this.windowMs) {
-      if (this.hits.size > 5000) this.hits.clear()
+      if (!h && this.hits.size >= this.maxKeys) {
+        for (const [k, v] of this.hits) if (t - v.start > this.windowMs) this.hits.delete(k)
+        // Still full of live windows: refuse new keys rather than forget the counted ones.
+        if (this.hits.size >= this.maxKeys) return false
+      }
       this.hits.set(key, { n: 1, start: t })
       return true
     }

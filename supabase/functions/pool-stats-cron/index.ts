@@ -75,23 +75,22 @@ function timingCols(s: PayoutStats | null) {
   }
 }
 
+/** Known direct pools' reward addresses (checked on chain 2026-10-28; same table in src/services/knownPools.ts). */
+const KNOWN_REWARDS: Record<string, string> = {
+  NQ321U9X7P3XB2H5XA005LC25KFEVBQEX3BU: 'NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717',
+  NQ155JNSU7CERAH53T02F8A9JCT6QMG97TSV: 'NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV',
+}
+
 /**
- * Reward addresses when getValidatorByAddress can't be read (RPC down, REST fallback has no
- * validator route): a known probe staker of a pool delegates to its validator and is paid from its
- * reward address, so staker(probe).delegation -> reward. Also the last stored values.
+ * Reward addresses when getValidatorByAddress can't be read (RPC down, the REST fallback has no
+ * validator route): the last stored value for the same validator, else the known-pools table.
+ * Nothing is ever inferred for a validator that never had one.
  */
-async function fallbackRewards(rpc: Rpc): Promise<Map<string, { reward: string, active: boolean }>> {
+async function fallbackRewards(): Promise<Map<string, { reward: string, active: boolean }>> {
   const out = new Map<string, { reward: string, active: boolean }>()
+  for (const [v, reward] of Object.entries(KNOWN_REWARDS)) out.set(v, { reward, active: true })
   const { data: prev } = await db.from('pool_stats').select('validator_address, reward_address, active').eq('network', 'mainnet').not('reward_address', 'is', null)
   for (const r of prev ?? []) out.set(norm(r.validator_address), { reward: r.reward_address, active: !!r.active })
-  const { data: probes } = await db.from('pool_probes').select('reward_address, probe_address').eq('network', 'mainnet')
-  for (const p of probes ?? []) {
-    try {
-      const st = await rpc.call<{ delegation?: string, balance?: number } | null>('getStakerByAddress', [p.probe_address])
-      if (st?.delegation && !out.has(norm(st.delegation))) out.set(norm(st.delegation), { reward: p.reward_address, active: true })
-    }
-    catch { /* next probe */ }
-  }
   return out
 }
 
@@ -109,7 +108,7 @@ async function runMainnet(rpc: Rpc) {
     try { chain = await rpc.call<ChainV>('getValidatorByAddress', [v.address]) }
     catch (e) { lookupFailed = !/not\s*found|no validator/i.test(String((e as Error).message)) }
     // RPC trouble is not "inactive": keep the last known reward address (or one learned from a probe).
-    const known = !chain && lookupFailed ? (fallback ??= await fallbackRewards(rpc)).get(norm(v.address)) ?? null : null
+    const known = !chain && lookupFailed ? (fallback ??= await fallbackRewards()).get(norm(v.address)) ?? null : null
     const reward = chain?.rewardAddress ?? known?.reward ?? null
     const active = chain ? chain.inactivityFlag == null && !chain.retired && chain.jailedFrom == null : !!known && elected.has(norm(v.address))
     const isElected = elected.has(norm(v.address))

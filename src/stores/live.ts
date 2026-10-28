@@ -9,7 +9,7 @@ import { useOps, onSettled } from './ops'
 import { useDry } from './dry'
 import { router } from '../router'
 import type { Pool } from '../services/mock'
-import { checkEndpoints, rpc } from '../services/rpc'
+import { checkEndpoints, rpc, rpcPool } from '../services/rpc'
 import {
   STAKING_CONTRACT, addressHistory, epochClock, findKickbacks, rewardOf, firstKickbackAt, getAccountBalance, getActiveValidators, getStaker, getValidator,
   learnProbe, norm, payoutClock, poolStats, sameAddr, spaced, scheduleLabel, statsFromKickbacks, unstakeReadyAt,
@@ -464,6 +464,9 @@ export const useLive = defineStore('live', {
      */
     async scanFull(gen: number) {
       if (scanning || !this.address) return
+      // The REST fallback only has an address's latest 20 transactions: a full-history scan through
+      // it would wrongly look complete. Wait for a JSON-RPC node.
+      if (rpcPool.order()[0]?.kind !== 'direct') return
       scanning = true
       const address = this.address
       const key = 'kbfull:' + norm(address)

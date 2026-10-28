@@ -14,6 +14,8 @@ export const PUBLIC_RPC: Record<Net, string[]> = {
 }
 
 export function serverRpcUrls(net: Net): string[] {
-  const extra = (Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET_URLS' : 'RPC_TESTNET_URLS') ?? '').split(',').map(s => s.trim()).filter(s => /^https:\/\//.test(s))
+  // RPC_MAINNET / RPC_TESTNET (the older single-URL secret names) are read too.
+  const raw = [Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET_URLS' : 'RPC_TESTNET_URLS'), Deno.env.get(net === 'mainnet' ? 'RPC_MAINNET' : 'RPC_TESTNET')].filter(Boolean).join(',')
+  const extra = raw.split(',').map(s => s.trim()).filter(s => /^https:\/\//.test(s))
   return [...new Set([...extra, ...PUBLIC_RPC[net]])]
 }

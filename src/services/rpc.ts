@@ -14,6 +14,7 @@ import { cacheGet, cacheSet, ageMs } from '../lib/cache'
 import { net } from '../lib/net'
 import { backendUrl } from './backend'
 import { EndpointPool, classifyFailure } from '../lib/endpoints'
+import type { EndpointKind } from '../lib/endpoints'
 import { REST_FALLBACK, restResult, restUrl } from '../lib/restAdapter'
 
 export const RPC_URL = net.rpcUrl
@@ -163,6 +164,12 @@ async function attempt<T>(url: string, method: string, params: unknown[], timeou
   return { kind: 'answer', value: (body!.result?.data ?? null) as T }
 }
 
+/** Which kind of endpoint produced an answer (objects and lists only). */
+const answeredBy = new WeakMap<object, EndpointKind>()
+export function rpcSource(value: unknown): EndpointKind | null {
+  return value && typeof value === 'object' ? answeredBy.get(value as object) ?? null : null
+}
+
 // ---------- one request ----------
 async function send<T>(method: string, params: unknown[]): Promise<T> {
   const cost = costOf(method, params)
@@ -182,7 +189,10 @@ async function send<T>(method: string, params: unknown[]): Promise<T> {
       continue
     }
     noteHealth()
-    if (r.kind === 'answer') return r.value
+    if (r.kind === 'answer') {
+      if (r.value && typeof r.value === 'object') answeredBy.set(r.value as object, ep.kind)
+      return r.value
+    }
     const e = r.error
     // Not a staker is an answer, not a failure.
     if (method === 'getStakerByAddress' && typeof e.data === 'string' && e.data.startsWith('No staker with address')) return null as T
