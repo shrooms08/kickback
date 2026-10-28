@@ -1,7 +1,7 @@
 // sync: the signed-in user's plan, contacts and processed shares.
 //   GET                         -> { plan, contacts, shares }
-//   PUT  { contacts?, plan? }   -> contacts is the full list (upserted; ones left out are removed),
-//                                 then the plan (validated against them)
+//   PUT  { contacts?, plan? }   -> contacts is the full list (upserted; ones left out are removed,
+//                                 in one transaction), then the plan (validated against them)
 //   POST { share }              -> records (or updates the status of) a processed share
 //   POST { event, network? }    -> records an event; without a session the address is left empty.
 //                                 Rate limited in Postgres per hour: SYNC_ANON_EVENTS_IP_MAX
@@ -39,18 +39,13 @@ async function put(s: Session, body: any) {
   const own = { address: s.address, network: s.network }
   if (body?.contacts !== undefined) {
     if (!Array.isArray(body.contacts) || body.contacts.length > 50) throw new ValidationError('contacts must be a list of at most 50')
-    const rows = body.contacts.map((c: unknown) => ({ ...validateContact(c, s.address), ...own }))
-    const ids = rows.map((r: { id: string }) => r.id)
-    let del = db.from('contacts').delete().eq('address', s.address).eq('network', s.network)
-    if (ids.length) del = del.not('id', 'in', `(${ids.map((i: string) => `"${i}"`).join(',')})`)
-    const { error: derr } = await del
-    if (derr) throw derr
-    if (rows.length) {
-      const { error } = await db.from('contacts').upsert(rows, { onConflict: 'address,network,id' })
-      if (error) {
-        if (error.code === '23505') throw new ValidationError('that contact address is already saved under another name')
-        throw error
-      }
+    const rows = body.contacts.map((c: unknown) => validateContact(c, s.address))
+    if (new Set(rows.map((r: { id: string }) => r.id)).size !== rows.length) throw new ValidationError('each contact needs its own id')
+    // One transaction: the ones left out are removed and the rest upserted, or nothing changes.
+    const { error } = await db.rpc('kickback_replace_contacts', { p_address: s.address, p_network: s.network, p_contacts: rows })
+    if (error) {
+      if (error.code === '23505') throw new ValidationError('that contact address is already saved under another name')
+      throw error
     }
   }
   if (body?.plan !== undefined) {

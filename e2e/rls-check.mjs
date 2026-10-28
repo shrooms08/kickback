@@ -40,8 +40,8 @@ for (const [name, method, path, body] of writes) {
   const r = await rest(method, path, body)
   log(`anon cannot ${name}`, r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0), `HTTP ${r.status} ${short(r.data)}`)
 }
-const rpcArgs = { cron_secret_ok: { p: 'guess' }, hit_rate_limit: { p_key: 'rpc:global', p_window_s: 60, p_max: 0 } }
-for (const fn of ['kickback_stats', 'cron_secret_ok', 'hit_rate_limit']) {
+const rpcArgs = { cron_secret_ok: { p: 'guess' }, hit_rate_limit: { p_key: 'rpc:global', p_window_s: 60, p_max: 0 }, kickback_replace_contacts: { p_address: addr, p_network: 'mainnet', p_contacts: [] } }
+for (const fn of ['kickback_stats', 'cron_secret_ok', 'hit_rate_limit', 'kickback_replace_contacts']) {
   const r = await rest('POST', `rpc/${fn}`, rpcArgs[fn] ?? {})
   log(`anon cannot call ${fn}()`, r.status >= 400, `HTTP ${r.status} ${short(r.data)}`)
 }
