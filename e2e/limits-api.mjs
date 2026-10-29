@@ -57,21 +57,37 @@ try {
   log('rpc-proxy: the global upstream cap refuses new upstream calls when full', r2.status === 429, `HTTP ${r2.status} ${JSON.stringify(r2.data).slice(0, 80)}`)
   sql(`delete from public.rate_limits where key = 'rpc:global';`)
 
-  // auth-nonce: per address and per IP.
+  // auth-nonce: per caller IP, and per address from each IP (so nobody can lock out an address).
   const addr = freshAddress(), other = freshAddress()
   const n0 = await call('auth-nonce', { body: { address: addr, network: 'testnet' } })
-  const addrKey = `nonce:addr:testnet:${addr}`
-  touched.add(addrKey)
-  log('auth-nonce counts each address in Postgres', n0.status === 200 && sql(`select hits from public.rate_limits where key = ${lit(addrKey)};`) === '1', `HTTP ${n0.status}`)
   const nonceIpKey = sql(`select key from public.rate_limits where key like 'nonce:ip:%' order by window_start desc limit 1;`)
   touched.add(nonceIpKey)
-  log('auth-nonce counts each caller IP in Postgres', nonceIpKey.startsWith('nonce:ip:'), nonceIpKey)
+  log('auth-nonce counts each caller IP in Postgres', n0.status === 200 && nonceIpKey.startsWith('nonce:ip:'), nonceIpKey)
+  const myIp = nonceIpKey.slice('nonce:ip:'.length)
+  const addrKey = `nonce:addr:testnet:${addr}:${myIp}`
+  touched.add(addrKey)
+  log('auth-nonce counts each address per caller IP in Postgres', sql(`select hits from public.rate_limits where key = ${lit(addrKey)};`) === '1', addrKey)
   fill(addrKey)
   const n1 = await call('auth-nonce', { body: { address: addr, network: 'testnet' } })
-  log('auth-nonce: an address over its limit gets 429', n1.status === 429, `HTTP ${n1.status}`)
+  log('auth-nonce: an address over its limit from this IP gets 429', n1.status === 429, `HTTP ${n1.status}`)
   const n2 = await call('auth-nonce', { body: { address: other, network: 'testnet' } })
   log('auth-nonce: another address from the same IP still gets a nonce', n2.status === 200, `HTTP ${n2.status}`)
-  touched.add(`nonce:addr:testnet:${other}`)
+  touched.add(`nonce:addr:testnet:${other}:${myIp}`)
+  // Review M2: someone else (another IP; locally the gateway passes cf-connecting-ip through)
+  // asks for nonces for the owner's address until refused. The owner can still sign in.
+  const victim = freshAddress(), attacker = '198.51.100.7'
+  let refused = 0
+  for (let i = 0; i < 40 && !refused; i++) if ((await call('auth-nonce', { body: { address: victim, network: 'testnet' }, headers: { 'cf-connecting-ip': attacker } })).status === 429) refused = i + 1
+  touched.add(`nonce:ip:${attacker}`)
+  for (const k of sql(`select key from public.rate_limits where key like ${lit(`nonce:addr:testnet:${victim}%`)};`).split('\n').filter(Boolean)) touched.add(k)
+  const owner = await call('auth-nonce', { body: { address: victim, network: 'testnet' } })
+  log('another IP hammering an address does not lock its owner out', refused > 0 && owner.status === 200, `attacker refused after ${refused}, owner HTTP ${owner.status}`)
+  for (const k of sql(`select key from public.rate_limits where key like ${lit(`nonce:addr:testnet:${victim}%`)};`).split('\n').filter(Boolean)) touched.add(k)
+  touched.add('nonce:global')
+  fill('nonce:global')
+  const ng = await call('auth-nonce', { body: { address: freshAddress(), network: 'testnet' } })
+  log('auth-nonce: the global cap refuses new nonces when full', ng.status === 429, `HTTP ${ng.status}`)
+  sql(`delete from public.rate_limits where key = 'nonce:global';`)
   fill(nonceIpKey)
   const n3 = await call('auth-nonce', { body: { address: freshAddress(), network: 'testnet' } })
   log('auth-nonce: an IP over its limit gets 429 for any address', n3.status === 429, `HTTP ${n3.status}`)
