@@ -5,7 +5,9 @@
 // Nothing that sends, signs or touches accounts is ever forwarded.
 // Limits (Postgres, shared by every isolate): RPC_PROXY_IP_MAX calls per IP a minute (default 60)
 // and RPC_PROXY_GLOBAL_MAX upstream calls a minute for everyone together (default 60, half the
-// public node's per-IP budget), so the proxy can't starve pool-stats-cron and xp-cron.
+// public node's per-IP budget), so the proxy can't starve pool-stats-cron and xp-cron. One IP gets
+// at most RPC_PROXY_IP_UPSTREAM_MAX of those upstream calls a minute (default 10), so a single
+// caller can't use up the global cap either.
 import { corsHeaders, json, readJson } from '../_shared/http.ts'
 import { createRpc } from '../_shared/payouts.ts'
 import { allowHit, limitFromEnv } from '../_shared/rateLimit.ts'
@@ -15,6 +17,7 @@ import type { Net } from '../_shared/rpcEndpoints.ts'
 
 const IP_MAX = limitFromEnv('RPC_PROXY_IP_MAX', 60)
 const GLOBAL_MAX = limitFromEnv('RPC_PROXY_GLOBAL_MAX', 60)
+const IP_UPSTREAM_MAX = limitFromEnv('RPC_PROXY_IP_UPSTREAM_MAX', 10)
 // First line, per isolate (no database round trip for an obvious flood).
 const limiter = new RateLimiter(IP_MAX, 60_000)
 const cache = new TtlCache<{ result?: unknown, error?: unknown }>(15_000, 2000)
@@ -40,7 +43,7 @@ Deno.serve(async (req) => {
   const key = `${net}:${check.method}:${JSON.stringify(check.params)}`
   let reply = cache.get(key)
   if (!reply) {
-    if (!(await allowHit('rpc:global', 60, GLOBAL_MAX))) return json({ error: 'Too many requests' }, 429, cors)
+    if (!(await allowHit(`rpc:ipup:${ip}`, 60, IP_UPSTREAM_MAX)) || !(await allowHit('rpc:global', 60, GLOBAL_MAX))) return json({ error: 'Too many requests' }, 429, cors)
     try { reply = await forward(net, check.method, check.params) }
     // The proxy itself is fine; no upstream could answer this method. A JSON-RPC error (HTTP 200)
     // so the app doesn't take the proxy for down (it fails over on 5xx).

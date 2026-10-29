@@ -51,6 +51,14 @@ try {
   log('rpc-proxy: an IP over its limit gets 429 (limit kept in Postgres, not per isolate)', r1.status === 429, `HTTP ${r1.status}`)
   sql(`delete from public.rate_limits where key = ${lit(ipKey)};`)
 
+  // Review L1: one IP gets only a share of the global upstream cap.
+  const upKey = ipKey.replace('rpc:ip:', 'rpc:ipup:')
+  touched.add(upKey)
+  fill(upKey)
+  const rUp = await call('rpc-proxy?network=testnet', { body: { method: 'getBlockByNumber', params: [Math.floor(Math.random() * 1e6) + 1, false] } })
+  log('rpc-proxy: an IP over its upstream share gets 429 while the global cap has room', rUp.status === 429, `HTTP ${rUp.status}`)
+  sql(`delete from public.rate_limits where key = ${lit(upKey)};`)
+
   // Global cap on calls that reach the upstream nodes: full -> refused before any RPC is made.
   touched.add('rpc:global')
   fill('rpc:global')
@@ -177,7 +185,7 @@ try {
   log('anon can neither call hit_rate_limit() nor read rate_limits', fn === 'false,false', fn)
 }
 finally {
-  for (const k of sql(`select key from public.rate_limits where key like 'rpc:ip:%' or key like 'nonce:ip:%' or key like 'verify:ip:%' or key like 'events:anon:%' or key like 'season:ip:%' or key like 'shares:ip:%' or key like 'ref:ip:%';`).split('\n').filter(Boolean)) touched.add(k)
+  for (const k of sql(`select key from public.rate_limits where key like 'rpc:ip:%' or key like 'rpc:ipup:%' or key like 'nonce:ip:%' or key like 'verify:ip:%' or key like 'events:anon:%' or key like 'season:ip:%' or key like 'shares:ip:%' or key like 'ref:ip:%';`).split('\n').filter(Boolean)) touched.add(k)
   cleanup()
 }
 
