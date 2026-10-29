@@ -21,16 +21,26 @@ export function checkTx(tx: ChainTx | null | undefined, e: TxExpect): boolean {
 }
 
 /**
- * Has this address ever staked? Reads its whole history, newest first, 100 a page: a tx from it to
- * the staking contract (stake, add stake) or from the contract to it (unstaked funds paid out).
+ * Is this a staking tx of this wallet? The staking contract is one end, and the other end is the
+ * wallet, or the wallet is among its relatedAddresses (a stake someone else sent for it, unstaked
+ * funds paid out to another address).
+ */
+export function isStakeTxFor(t: { from: string, to: string, relatedAddresses?: string[] }, address: string): boolean {
+  const me = norm(address), contract = norm(STAKING_CONTRACT), from = norm(t.from), to = norm(t.to)
+  if (from !== contract && to !== contract) return false
+  return from === me || to === me || (t.relatedAddresses ?? []).some(a => norm(a) === me)
+}
+
+/**
+ * Has this address ever staked? Reads its whole history, newest first, 100 a page, for a staking
+ * tx of this wallet (isStakeTxFor).
  * A history longer than maxPages pages is taken as "has staked" (it is not a new wallet).
  */
-export async function everStaked(page: (startAt: string | null) => Promise<ChainTx[]>, address: string, maxPages = 20): Promise<boolean> {
-  const me = norm(address), contract = norm(STAKING_CONTRACT)
+export async function everStaked(page: (startAt: string | null) => Promise<Array<ChainTx & { relatedAddresses?: string[] }>>, address: string, maxPages = 20): Promise<boolean> {
   let startAt: string | null = null
   for (let i = 0; i < maxPages; i++) {
     const list = await page(startAt)
-    if (list.some(t => (norm(t.from) === me && norm(t.to) === contract) || (norm(t.from) === contract && norm(t.to) === me))) return true
+    if (list.some(t => isStakeTxFor(t, address))) return true
     if (list.length < 100) return false
     startAt = list[list.length - 1].hash
   }

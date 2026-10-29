@@ -20,7 +20,7 @@ import { verifyShare } from '../_shared/proofs.ts'
 import type { ShareRow } from '../_shared/proofs.ts'
 import { SKINS, countedRuns, inviteCode, isInviteCode, milestonesFrom, streak } from '../_shared/season.ts'
 import type { Skin } from '../_shared/season.ts'
-import { STAKING_CONTRACT, everStaked } from '../_shared/verify.ts'
+import { everStaked, isStakeTxFor } from '../_shared/verify.ts'
 import { TIERS, XP, seasonOf, tierInfo } from '../_shared/xp.ts'
 import { awardFromData, seasonXp, snapshotStake } from '../_shared/xpAward.ts'
 import { TtlCache, clientIp } from '../_shared/rpcProxy.ts'
@@ -88,7 +88,7 @@ async function scanChain(s: Session): Promise<boolean> {
         if (t.hash === prev?.newest_hash) { stop = true; break }
         if (t.executionResult === false || !(t.value > 0)) continue
         if (norm(t.to) === me && rewards.has(norm(t.from))) found.push({ address: s.address, network: s.network, hash: t.hash, at: new Date(t.timestamp).toISOString(), luna: t.value, from_address: t.from })
-        if (norm(t.from) === me && norm(t.to) === norm(STAKING_CONTRACT)) staked = true
+        if (isStakeTxFor(t, s.address)) staked = true
       }
       if (stop || list.length < 100) break
       startAt = list[list.length - 1].hash
