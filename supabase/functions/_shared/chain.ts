@@ -11,7 +11,23 @@ export type Net = 'mainnet' | 'testnet'
 /** One client per network per isolate: they share the per-IP budget. */
 const clients: Partial<Record<Net, Rpc>> = {}
 export function rpcFor(net: Net): Rpc {
-  return clients[net] ??= createRpc(serverRpcUrls(net), 12, { retry429: false, rest: serverRest(net) })
+  return clients[net] ??= gated(createRpc(serverRpcUrls(net), 12, { retry429: false, rest: serverRest(net) }))
+}
+
+/**
+ * Functions that read the chain for users (season, sync) set a gate that counts every call
+ * against a shared budget; the crons set none. A refused call throws like network trouble, so
+ * callers fall back to the stored state and try again later.
+ */
+let gate: (() => Promise<boolean>) | null = null
+export function setRpcGate(check: () => Promise<boolean>) { gate = check }
+function gated(rpc: Rpc): Rpc {
+  const pass = async () => { if (gate && !(await gate())) throw new Error('server chain budget used up, try again later') }
+  return {
+    ...rpc,
+    call: async <T>(method: string, params: unknown[]): Promise<T> => { await pass(); return rpc.call<T>(method, params) },
+    raw: async (method: string, params: unknown[]) => { await pass(); return rpc.raw(method, params) },
+  }
 }
 
 /** The node answered "there is no such thing" (as opposed to HTTP trouble or a timeout). */

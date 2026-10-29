@@ -1,6 +1,8 @@
 // Persistent rate limits against the LOCAL stack only (it reads and seeds public.rate_limits
 // through `docker exec … psql`): rpc-proxy per IP and its global upstream cap, auth-nonce per IP
-// and per address, auth-verify per IP, sync events per IP (no session) and per wallet.
+// and per address, auth-verify per IP, sync events per IP (no session) and per wallet, season reads,
+// invite claims and share reports per wallet and IP, and the shared budget for the chain reads that
+// season and sync make for users (one chain scan a minute per wallet, however many reads).
 // Limits are seeded as already full instead of looping up to them, so the test does not depend
 // on the configured numbers and does not use up the budget other suites need. Every key the test
 // touched is removed at the end.
@@ -120,11 +122,62 @@ try {
   const e3 = await call('sync', { token: w.token, body: { event: { kind: 'connect' } } })
   log('signed-in events over the wallet limit get 429', e3.status === 429, `HTTP ${e3.status}`)
 
+  // Review M3: season reads, invite claims and share reports are limited per wallet and per IP.
+  const m = await signIn()
+  const mIp = myIp
+  const today = new Date().toISOString().slice(0, 10)
+  const hits = key => Number(sql(`select coalesce((select hits from public.rate_limits where key = ${lit(key)}), 0);`))
+  const share = () => ({ share: { id: crypto.randomUUID(), amount_luna: 100000, slice_type: 'send', tx_hash: hex(randomBytes(32)), run_id: crypto.randomUUID() } })
+  const cases = [
+    ['season read', `season:addr:testnet:${m.address}`, () => call('season', { method: 'GET', token: m.token })],
+    ['season read', `season:ip:${mIp}`, () => call('season', { method: 'GET', token: m.token })],
+    ['share report', `shares:addr:testnet:${m.address}`, () => call('sync', { token: m.token, body: share() })],
+    ['share report', `shares:ip:${mIp}`, () => call('sync', { token: m.token, body: share() })],
+    ['invite claim', `ref:addr:testnet:${m.address}`, () => call('season', { token: m.token, body: { ref: 'KICK-2222' } })],
+    ['invite claim', `ref:ip:${mIp}`, () => call('season', { token: m.token, body: { ref: 'KICK-2222' } })],
+  ]
+  for (const [what, key, req] of cases) {
+    touched.add(key)
+    fill(key)
+    const r = await req()
+    log(`${what} over the ${key.split(':')[1] === 'ip' ? 'IP' : 'wallet'} limit gets 429`, r.status === 429, `HTTP ${r.status} ${key}`)
+    sql(`delete from public.rate_limits where key = ${lit(key)};`)
+  }
+
+  // One chain scan a minute per wallet, claimed atomically: parallel reads don't each read the chain.
+  touched.add('rpc:server')
+  sql(`insert into public.stake_snapshots (address, network, day, active_luna) values ('${m.address}', 'testnet', '${today}', 0) on conflict do nothing;`)
+  const unthrottle = a => sql(`update public.chain_scan set scanned_at = now() - interval '2 minutes' where address = '${a}' and network = 'testnet';`)
+  unthrottle(m.address); sql(`delete from public.rate_limits where key = 'rpc:server';`)
+  await call('season', { method: 'GET', token: m.token })
+  const one = hits('rpc:server')
+  unthrottle(m.address); sql(`delete from public.rate_limits where key = 'rpc:server';`)
+  await Promise.all(Array.from({ length: 5 }, () => call('season', { method: 'GET', token: m.token })))
+  const five = hits('rpc:server')
+  log('season chain reads count against the shared server budget', one > 0, `${one} calls`)
+  log('5 parallel season reads read the chain once', five === one, `one read ${one}, five parallel ${five}`)
+
+  // Parallel invite claims from one wallet: one is recorded, the chain is read once.
+  const code = (await call('season', { method: 'GET', token: m.token })).data.code
+  const claimer = await signIn()
+  sql(`delete from public.rate_limits where key = 'rpc:server';`)
+  const claims = await Promise.all(Array.from({ length: 3 }, () => call('season', { token: claimer.token, body: { ref: code } })))
+  const st = claims.map(c => c.status).sort().join(',')
+  log('3 parallel claims: one recorded, the others refused', st === '200,409,409', st)
+  log('3 parallel claims read the chain once (staker + one history page)', hits('rpc:server') === 2, `${hits('rpc:server')} calls`)
+
+  // The shared budget used up: season answers from the stored state (chainOk false), no chain reads.
+  fill('rpc:server')
+  unthrottle(m.address)
+  const busy = await call('season', { method: 'GET', token: m.token })
+  log('server chain budget used up: season still answers, chainOk false', busy.status === 200 && busy.data.chainOk === false, `HTTP ${busy.status} chainOk ${busy.data.chainOk}`)
+  sql(`delete from public.rate_limits where key = 'rpc:server';`)
+
   const fn = sql(`select has_function_privilege('anon', 'public.hit_rate_limit(text, integer, integer)', 'execute')::text || ',' || has_table_privilege('anon', 'public.rate_limits', 'select')::text;`)
   log('anon can neither call hit_rate_limit() nor read rate_limits', fn === 'false,false', fn)
 }
 finally {
-  for (const k of sql(`select key from public.rate_limits where key like 'rpc:ip:%' or key like 'nonce:ip:%' or key like 'verify:ip:%' or key like 'events:anon:%';`).split('\n').filter(Boolean)) touched.add(k)
+  for (const k of sql(`select key from public.rate_limits where key like 'rpc:ip:%' or key like 'nonce:ip:%' or key like 'verify:ip:%' or key like 'events:anon:%' or key like 'season:ip:%' or key like 'shares:ip:%' or key like 'ref:ip:%';`).split('\n').filter(Boolean)) touched.add(k)
   cleanup()
 }
 

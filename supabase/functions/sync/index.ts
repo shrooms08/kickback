@@ -7,6 +7,8 @@
 //                                 Rate limited in Postgres per hour: SYNC_ANON_EVENTS_IP_MAX
 //                                 without a session per caller IP (default 20), and
 //                                 SYNC_EVENTS_ADDRESS_MAX per signed-in wallet (default 120)
+// Share reports are limited per 10 minutes: SHARES_WALLET_MAX per wallet (60) and SHARES_IP_MAX per
+// IP (300). Chain checks count against SERVER_RPC_GLOBAL_MAX a minute (60), shared with season.
 // Every write is validated here: slices total 100, contact addresses pass the Nimiq checksum
 // and aren't the user's own, Luna amounts are positive whole numbers.
 import { db } from '../_shared/db.ts'
@@ -14,7 +16,7 @@ import { corsHeaders, json, readJson } from '../_shared/http.ts'
 import { bearer, verifySession } from '../_shared/session.ts'
 import type { Session } from '../_shared/session.ts'
 import { ValidationError, positiveLuna, validateContact, validateEvent, validateNetwork, validateShare, validateSlices } from '../_shared/validate.ts'
-import { rpcFor } from '../_shared/chain.ts'
+import { rpcFor, setRpcGate } from '../_shared/chain.ts'
 import { verifyShare, verifyStakeEvent } from '../_shared/proofs.ts'
 import { allowHit, limitFromEnv } from '../_shared/rateLimit.ts'
 import { clientIp } from '../_shared/rpcProxy.ts'
@@ -23,6 +25,9 @@ const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
 const ANON_EVENTS_IP_MAX = limitFromEnv('SYNC_ANON_EVENTS_IP_MAX', 20)
 const EVENTS_ADDRESS_MAX = limitFromEnv('SYNC_EVENTS_ADDRESS_MAX', 120)
+const SHARES_WALLET_MAX = limitFromEnv('SHARES_WALLET_MAX', 60)
+const SHARES_IP_MAX = limitFromEnv('SHARES_IP_MAX', 300)
+setRpcGate(() => allowHit('rpc:server', 60, limitFromEnv('SERVER_RPC_GLOBAL_MAX', 60)))
 
 async function getAll(s: Session) {
   const own = <T>(q: any): Promise<T> => q.eq('address', s.address).eq('network', s.network).then((r: any) => { if (r.error) throw r.error; return r.data })
@@ -69,6 +74,7 @@ async function put(s: Session, body: any) {
 async function post(s: Session | null, body: any, ip: string) {
   if (body?.share !== undefined) {
     if (!s) return { status: 401, body: { error: 'Sign in to back up shares.' } }
+    if (!(await allowHit(`shares:addr:${s.network}:${s.address}`, 600, SHARES_WALLET_MAX)) || !(await allowHit(`shares:ip:${ip}`, 600, SHARES_IP_MAX))) return { status: 429, body: { error: 'Too many shares. Try again in a few minutes.' } }
     const share = validateShare(body.share)
     const { data: existing, error: e1 } = await db.from('shares').select('address, network, amount_luna, slice_type, tx_hash, run_id, verified').eq('id', share.id).maybeSingle()
     if (e1) throw e1

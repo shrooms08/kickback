@@ -62,8 +62,11 @@ const KEEP_MIN_LUNA = 100_000
 /** A share earns XP only if it was reported within a day of its tx (no back-filling old transfers). */
 const REPORT_WINDOW_MS = 24 * H
 
-/** Award runs, shares, invites and quests for one wallet; returns quest progress for this week. */
-export async function awardFromData(address: string, network: Net, now = Date.now()) {
+/**
+ * Award runs, shares, invites and quests for one wallet; returns quest progress for this week.
+ * chain: false = database only (no RPC read for an invitee's missing stake snapshot).
+ */
+export async function awardFromData(address: string, network: Net, now = Date.now(), opts: { chain?: boolean } = {}) {
   const s = seasonOf(now)
   const week = weekKey(now), weekStart = Date.parse(week + 'T00:00:00Z'), weekEnd = weekStart + 7 * 24 * H
   const seasonStart = Date.parse(s.startsAt)
@@ -131,7 +134,7 @@ export async function awardFromData(address: string, network: Net, now = Date.no
       const snaps = () => db.from('stake_snapshots').select('day, active_luna').eq('address', c.invitee).eq('network', network).gt('day', utcDay(claimedAt)).then(must) as Promise<Array<{ day: string, active_luna: number }>>
       let kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
       // The week is done but today's stake isn't known yet: take today's snapshot (one RPC read).
-      if (kept === 'wait' && (await snapshotStake(c.invitee, network, now)).ok) kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
+      if (kept === 'wait' && opts.chain !== false && (await snapshotStake(c.invitee, network, now)).ok) kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
       if (kept !== 'yes') continue
       if (await grantInvite(address, network, s.id, c.invitee)) granted++
     }
