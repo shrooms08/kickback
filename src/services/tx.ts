@@ -39,6 +39,16 @@ export async function send(req: SendRequest): Promise<SubmitResult> {
 // 08 SetActiveStake, 09 RetireStake. Seen on chain: AddStake = "06…".
 const TYPE_BYTE: Partial<Record<SendRequest['kind'], string>> = { newStaker: '05', addStake: '06', updateStaker: '07', setActive: '08', retire: '09' }
 
+/**
+ * SetActiveStake and RetireStake carry their amount right after the type byte, as a u64
+ * big-endian (seen on chain: 09 00000000001e8582 retired 2,000,258 Luna). Null when it can't be read.
+ */
+export function stakeDataAmount(data: string): number | null {
+  if (!/^[0-9a-f]{18}/i.test(data)) return null
+  const n = Number(BigInt('0x' + data.slice(2, 18)))
+  return Number.isSafeInteger(n) ? n : null
+}
+
 const utf8Hex = (text: string) => Array.from(new TextEncoder().encode(text), b => b.toString(16).padStart(2, '0')).join('')
 
 /** Does this on-chain transaction look like the one we tried to send? */
@@ -48,13 +58,16 @@ export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, m
     case 'payment':
       return sameAddr(tx.from, me) && paidAs(tx, req)
     case 'remove':
-      // Paid out of the staking contract to us; a fee could come out of the value.
-      return sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, me) && tx.value <= req.value && tx.value >= req.value - 100_000
+      // Paid out of the staking contract to us. The fee (when there is one) comes out of the
+      // removed amount, so the value is the amount, or the amount minus this tx's fee.
+      return sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, me) && (tx.value === req.value || tx.value + (tx.fee ?? 0) === req.value)
     default: {
       if (!sameAddr(tx.from, me) || !sameAddr(tx.to, STAKING_CONTRACT)) return false
       const t = TYPE_BYTE[req.kind]
       if (tx.recipientData && t && !tx.recipientData.startsWith(t)) return false
       if (req.kind === 'newStaker' || req.kind === 'addStake') return tx.value === req.value
+      // The amount is in the data; a source without the data field can't rule it out.
+      if ((req.kind === 'setActive' || req.kind === 'retire') && tx.recipientData) return stakeDataAmount(tx.recipientData) === req.value
       return true
     }
   }
