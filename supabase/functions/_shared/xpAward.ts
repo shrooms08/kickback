@@ -53,13 +53,16 @@ async function grantInvite(address: string, network: Net, season: number, invite
   return false
 }
 
-interface ShareRow { id: string, run_id: string | null, slice_type: string, amount_luna: number, tx_hash: string | null, block_at: string | null, created_at: string }
+interface ShareRow { id: string, run_id: string | null, slice_type: string, amount_luna: number, tx_hash: string | null, block_at: string | null, reported_at: string }
 
 /** Invitees must keep a real stake before the inviter earns: 10+ NIM every day for 7 days after the claim. */
 const INVITE_MIN_LUNA = 1_000_000, INVITES_PER_SEASON = 10
 /** The weekly "keep your stake" quest needs at least 1 NIM active. */
 const KEEP_MIN_LUNA = 100_000
-/** A share earns XP only if it was reported within a day of its tx (no back-filling old transfers). */
+/**
+ * A share earns XP only if it was reported within a day of its tx's block, either way (no
+ * back-filling old transfers, no share reported long before the tx it ends up naming).
+ */
 const REPORT_WINDOW_MS = 24 * H
 
 /**
@@ -76,7 +79,7 @@ export async function awardFromData(address: string, network: Net, now = Date.no
   const minLuna = Math.max(10_000, Number(plan?.min_ready_luna ?? 10_000))
   const kickTimes = (must(await db.from('kickbacks_seen').select('at').eq('address', address).eq('network', network)) as Array<{ at: string }>).map(k => Date.parse(k.at))
   // Only verified shares count (keep slices have no tx and are never verified).
-  const shares = must(await db.from('shares').select('id, run_id, slice_type, amount_luna, tx_hash, block_at, created_at')
+  const shares = must(await db.from('shares').select('id, run_id, slice_type, amount_luna, tx_hash, block_at, reported_at')
     .eq('address', address).eq('network', network).eq('status', 'confirmed').eq('verified', true).not('run_id', 'is', null)) as ShareRow[]
 
   // One entry per run: its time is its first tx's block time, its proof that tx's hash (chain data,
@@ -85,7 +88,7 @@ export async function awardFromData(address: string, network: Net, now = Date.no
   for (const x of shares) {
     if (!x.block_at || !x.tx_hash) continue
     const at = Date.parse(x.block_at)
-    if (Date.parse(x.created_at) > at + REPORT_WINDOW_MS) continue
+    if (Math.abs(Date.parse(x.reported_at) - at) > REPORT_WINDOW_MS) continue
     const r = runs.get(x.run_id!) ?? { at: Infinity, proof: '', verified: 0, sends: 0, total: 0 }
     r.verified++
     r.total += Number(x.amount_luna)
