@@ -115,6 +115,25 @@ ${days(9).map((d, i) => `insert into public.stake_snapshots (address, network, d
 unthrottle(a.address)
 const s8 = await season(a.token)
 log('an invitee whose stake dipped below 10 NIM during the week earns nothing', s8.data.xp === 3700, `xp ${s8.data.xp}`)
+// Review M1: the cap of 10 invites a season holds even for parallel season reads.
+const capper = await signIn()
+const inviteesSql = Array.from({ length: 12 }, () => `NQ00 M1${hex(randomBytes(6)).toUpperCase()}`).map(addr => `insert into public.users (address, network) values ('${addr}', 'testnet');
+insert into public.referrals (invitee, network, inviter, code, had_stake_at_claim, claimed_at, credited_at) values ('${addr}', 'testnet', '${capper.address}', 'KICK-TEST', false, now() - interval '8 days', now());
+${days(9).map(d => `insert into public.stake_snapshots (address, network, day, active_luna) values ('${addr}', 'testnet', '${d}', 1000000);`).join('\n')}`).join('\n')
+// The wallet's chain scan is fresh, so the reads go straight to the (database only) award step together.
+sql(`${inviteesSql}
+insert into public.chain_scan (address, network, scanned_at) values ('${capper.address}', 'testnet', now()) on conflict (address, network) do update set scanned_at = now();`)
+await Promise.all(Array.from({ length: 8 }, () => season(capper.token)))
+await season(capper.token)
+const capRows = sql(`select count(*) from public.xp_ledger where address = '${capper.address}' and network = 'testnet' and source = 'invite';`)
+log('parallel season reads with 12 eligible invitees award exactly 10 invites', capRows === '10', `${capRows} invite rows`)
+log('invite rows hold a slot (invite#1..10) and the invitee as proof', sql(`select count(*) from public.xp_ledger where source = 'invite' and (ref !~ '^invite#' or proof is null);`) === '0')
+const slotOut = execFileSync('docker', ['exec', '-i', 'supabase_db_kickback', 'psql', '-U', 'postgres', '-d', 'postgres', '-q'], { input: `do $$ begin
+  begin insert into public.xp_ledger (address, network, season, source, ref, proof, amount) values ('${capper.address}', 'testnet', 1, 'invite', 'invite#11', 'NQ00 EXTRA', 500); raise notice 'SLOT_ACCEPTED';
+  exception when check_violation then raise notice 'SLOT_REFUSED'; end;
+end $$;`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
+log('ledger: an 11th invite slot is refused by the database', !slotOut.includes('ACCEPTED'))
+
 // "Never staked before" also looks at what the server already saw (a past stake snapshot).
 const old = await signIn()
 sql(`insert into public.stake_snapshots (address, network, day, active_luna) values ('${old.address}', 'testnet', '${days(11)[10]}', 500000);`)
