@@ -6,12 +6,14 @@ import { memoryStorage } from './helpers/storage'
 // network's transactionValidityWindow from getPolicyConstants) and still not in a block didn't go
 // through: the op ends "Didn't go through. Nothing moved." and its amount is ready again.
 const ME = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', TO = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
-const chain = vi.hoisted(() => ({ head: 1000, policy: true as boolean, vsh: 1000 as number | null, included: false }))
+const chain = vi.hoisted(() => ({ head: 1000, policy: true as boolean, vsh: 1000 as number | null, included: false, history: [] as unknown[], historyFails: false }))
 vi.mock('../src/services/rpc', () => ({
   rpc: vi.fn(async (method: string) => {
     let value: unknown = null
     if (method === 'getBlockNumber') value = chain.head
     else if (method === 'getPolicyConstants') { if (!chain.policy) throw new Error('not allowed'); value = { transactionValidityWindow: 7200 } }
+    else if (method === 'getTransactionsByAddress') { if (chain.historyFails) throw new Error('down'); value = chain.history }
+    else if (method === 'mempoolContent') value = []
     else if (method === 'getTransactionByHash') {
       if (chain.included) value = { hash: 'h1', from: ME, to: TO, value: 1, blockNumber: 9000, executionResult: true, timestamp: 1 }
       else if (chain.vsh != null) value = { hash: 'h1', from: ME, to: TO, value: 1, blockNumber: 0, validityStartHeight: chain.vsh, timestamp: 1 }
@@ -28,7 +30,7 @@ beforeEach(() => {
   memoryStorage()
   vi.resetModules()
   setActivePinia(createPinia())
-  Object.assign(chain, { head: 1000, policy: true, vsh: 1000, included: false })
+  Object.assign(chain, { head: 1000, policy: true, vsh: 1000, included: false, history: [], historyFails: false })
   vi.useFakeTimers()
 })
 afterEach(() => vi.useRealTimers())
@@ -68,6 +70,22 @@ describe('stuck confirmation', () => {
     chain.head = 8201; chain.included = true
     await vi.advanceTimersByTimeAsync(2 * 60_000)
     expect(s.ops.byId(s.id)?.phase).toBe('confirmed')
+  })
+  it('a lagging lookup by hash is not trusted: found in the history, it is confirmed, not expired', async () => {
+    const s = await start()
+    chain.head = 8201
+    chain.history = [{ hash: 'h1', from: ME, to: TO, value: 250_000, timestamp: Date.now(), blockNumber: 8000, executionResult: true }]
+    chain.vsh = 1000 // by hash it still looks pending
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    chain.included = true // a later lookup sees the block
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(s.ops.byId(s.id)?.phase).toBe('confirmed')
+  })
+  it('history unreadable at the end of the window: it keeps waiting', async () => {
+    const s = await start()
+    chain.head = 8201; chain.historyFails = true
+    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    expect(s.ops.byId(s.id)?.phase).toBe('confirming')
   })
   it('without the start height, the height at send time is used (never earlier)', async () => {
     chain.vsh = null

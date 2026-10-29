@@ -217,19 +217,25 @@ export const useOps = defineStore('ops', {
         return v
       }
       if (!op.dry) void until() // learnt in the background; polling starts at once
-      const r = await waitIncluded(op.hash, {
-        onSlow: () => this.patch(id, { slow: true }),
-        onTx: tx => this.checkSigner(op, tx),
-        // Past its validity window and still not in a block: it can never be included.
-        expired: op.dry ? undefined : async () => { const v = await until(); return v != null && pastValidity(v) },
-      })
-      if (r === 'expired') {
+      for (;;) {
+        const hash = this.byId(id)?.hash ?? op.hash
+        const r = await waitIncluded(hash, {
+          onSlow: () => this.patch(id, { slow: true }),
+          onTx: tx => this.checkSigner(op, tx),
+          // Past its validity window and still not in a block: it can never be included.
+          expired: op.dry ? undefined : async () => { const v = await until(); return v != null && pastValidity(v) },
+        })
+        if (r !== 'expired') { this.patch(id, { phase: r === 'ok' ? 'confirmed' : 'failed' }); return }
+        // A lookup by hash can come from a lagging source. Expire only when a JSON-RPC node's
+        // history (and mempool) says it isn't there; found: follow it; unreadable: keep waiting.
+        const seen = await searchWide(op.address, op.req, op.startedAt, this.knownHashes(id))
+        if (seen === UNKNOWN) continue
+        if (seen) { if (seen !== hash) this.patch(id, { hash: seen }); continue }
         const cur = this.byId(id)!
         this.patch(id, { phase: 'not-sent', error: EXPIRED_TEXT, slow: false, meta: { ...cur.meta, released: 1 } })
         useUi().showToast(EXPIRED_TEXT)
         return
       }
-      this.patch(id, { phase: r === 'ok' ? 'confirmed' : 'failed' })
     },
 
     /**
