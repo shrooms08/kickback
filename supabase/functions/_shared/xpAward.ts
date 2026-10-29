@@ -36,17 +36,40 @@ export async function snapshotStake(address: string, network: Net, now = Date.no
   return { ok: true, activeLuna: active }
 }
 
-interface ShareRow { id: string, run_id: string | null, slice_type: string, amount_luna: number, tx_hash: string | null, block_at: string | null, created_at: string }
+/**
+ * Invite XP takes one of 10 slots a season ('invite#1'..'invite#10', a CHECK allows no others)
+ * with the invitee as proof (unique): parallel reads can't pass the cap or pay one invitee twice.
+ * A taken slot (another read won it) moves on to the next.
+ */
+async function grantInvite(address: string, network: Net, season: number, invitee: string): Promise<boolean> {
+  for (let tries = 0; tries <= INVITES_PER_SEASON; tries++) {
+    const rows = must(await db.from('xp_ledger').select('season, ref, proof').eq('address', address).eq('network', network).eq('source', 'invite')) as Array<{ season: number, ref: string, proof: string | null }>
+    if (rows.some(r => r.proof === invitee)) return false
+    const used = new Set(rows.filter(r => r.season === season).map(r => r.ref))
+    const slot = Array.from({ length: INVITES_PER_SEASON }, (_, i) => `invite#${i + 1}`).find(r => !used.has(r))
+    if (!slot) return false
+    if (await grant({ address, network, season, source: 'invite', ref: slot, proof: invitee, amount: XP.invite })) return true
+  }
+  return false
+}
+
+interface ShareRow { id: string, run_id: string | null, slice_type: string, amount_luna: number, tx_hash: string | null, block_at: string | null, reported_at: string }
 
 /** Invitees must keep a real stake before the inviter earns: 10+ NIM every day for 7 days after the claim. */
 const INVITE_MIN_LUNA = 1_000_000, INVITES_PER_SEASON = 10
 /** The weekly "keep your stake" quest needs at least 1 NIM active. */
 const KEEP_MIN_LUNA = 100_000
-/** A share earns XP only if it was reported within a day of its tx (no back-filling old transfers). */
+/**
+ * A share earns XP only if it was reported within a day of its tx's block, either way (no
+ * back-filling old transfers, no share reported long before the tx it ends up naming).
+ */
 const REPORT_WINDOW_MS = 24 * H
 
-/** Award runs, shares, invites and quests for one wallet; returns quest progress for this week. */
-export async function awardFromData(address: string, network: Net, now = Date.now()) {
+/**
+ * Award runs, shares, invites and quests for one wallet; returns quest progress for this week.
+ * chain: false = database only (no RPC read for an invitee's missing stake snapshot).
+ */
+export async function awardFromData(address: string, network: Net, now = Date.now(), opts: { chain?: boolean } = {}) {
   const s = seasonOf(now)
   const week = weekKey(now), weekStart = Date.parse(week + 'T00:00:00Z'), weekEnd = weekStart + 7 * 24 * H
   const seasonStart = Date.parse(s.startsAt)
@@ -56,7 +79,7 @@ export async function awardFromData(address: string, network: Net, now = Date.no
   const minLuna = Math.max(10_000, Number(plan?.min_ready_luna ?? 10_000))
   const kickTimes = (must(await db.from('kickbacks_seen').select('at').eq('address', address).eq('network', network)) as Array<{ at: string }>).map(k => Date.parse(k.at))
   // Only verified shares count (keep slices have no tx and are never verified).
-  const shares = must(await db.from('shares').select('id, run_id, slice_type, amount_luna, tx_hash, block_at, created_at')
+  const shares = must(await db.from('shares').select('id, run_id, slice_type, amount_luna, tx_hash, block_at, reported_at')
     .eq('address', address).eq('network', network).eq('status', 'confirmed').eq('verified', true).not('run_id', 'is', null)) as ShareRow[]
 
   // One entry per run: its time is its first tx's block time, its proof that tx's hash (chain data,
@@ -65,7 +88,7 @@ export async function awardFromData(address: string, network: Net, now = Date.no
   for (const x of shares) {
     if (!x.block_at || !x.tx_hash) continue
     const at = Date.parse(x.block_at)
-    if (Date.parse(x.created_at) > at + REPORT_WINDOW_MS) continue
+    if (Math.abs(Date.parse(x.reported_at) - at) > REPORT_WINDOW_MS) continue
     const r = runs.get(x.run_id!) ?? { at: Infinity, proof: '', verified: 0, sends: 0, total: 0 }
     r.verified++
     r.total += Number(x.amount_luna)
@@ -103,20 +126,20 @@ export async function awardFromData(address: string, network: Net, now = Date.no
       }
     }
     // Invites credited this season whose invitee kept a real stake on each of the 7 days after the
-    // claim and still has it: awarded on the first read after that (once: the ledger is unique per
-    // invitee). At most 10 a season.
+    // claim and still has it: awarded on the first read after that (once per invitee, at most 10 a
+    // season: both enforced by the database, see grantInvite).
     const credited = must(await db.from('referrals').select('invitee, claimed_at, credited_at').eq('network', network).eq('inviter', address).not('credited_at', 'is', null).order('credited_at')) as Array<{ invitee: string, claimed_at: string, credited_at: string }>
     let granted = ledger.filter(l => l.source === 'invite').length
     for (const c of credited) {
       if (granted >= INVITES_PER_SEASON) break
       const claimedAt = Date.parse(c.claimed_at)
-      if (Date.parse(c.credited_at) < seasonStart || has.has(`invite:${c.invitee}`) || now < claimedAt + INVITE_KEEP_DAYS * 24 * H) continue
+      if (Date.parse(c.credited_at) < seasonStart || proved.has(`invite:${c.invitee}`) || now < claimedAt + INVITE_KEEP_DAYS * 24 * H) continue
       const snaps = () => db.from('stake_snapshots').select('day, active_luna').eq('address', c.invitee).eq('network', network).gt('day', utcDay(claimedAt)).then(must) as Promise<Array<{ day: string, active_luna: number }>>
       let kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
       // The week is done but today's stake isn't known yet: take today's snapshot (one RPC read).
-      if (kept === 'wait' && (await snapshotStake(c.invitee, network, now)).ok) kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
+      if (kept === 'wait' && opts.chain !== false && (await snapshotStake(c.invitee, network, now)).ok) kept = inviteStakeKept(claimedAt, now, await snaps(), INVITE_MIN_LUNA)
       if (kept !== 'yes') continue
-      if (await give({ source: 'invite', ref: c.invitee, amount: XP.invite })) granted++
+      if (await grantInvite(address, network, s.id, c.invitee)) granted++
     }
   }
 

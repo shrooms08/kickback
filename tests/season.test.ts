@@ -248,3 +248,25 @@ describe('a restake share must come after the latest kickback (audit 16)', () =>
     expect(restakeAfterKickback(t0 - 50 * H, kicks, t0 - 49 * H)).toBe(false)
   })
 })
+
+import { isStakeTxFor } from '../supabase/functions/_shared/verify'
+describe('stake txs also count through relatedAddresses (review L3)', () => {
+  const ME = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8', OTHER = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
+  const t = (from: string, to: string, related?: string[]) => ({ hash: 'h', from, to, value: 1, timestamp: 1, ...(related ? { relatedAddresses: related } : {}) })
+  it('a stake sent for this wallet by someone else counts', () => {
+    expect(isStakeTxFor(t(OTHER, STAKING_CONTRACT, [OTHER, STAKING_CONTRACT, ME]), ME)).toBe(true)
+  })
+  it('unstaked funds paid to another address count for the staker named in relatedAddresses', () => {
+    expect(isStakeTxFor(t(STAKING_CONTRACT, OTHER, [STAKING_CONTRACT, OTHER, ME.replace(/\s/g, '')]), ME)).toBe(true)
+  })
+  it('direct stake and unstake txs still count; unrelated ones do not', () => {
+    expect(isStakeTxFor(t(ME, STAKING_CONTRACT), ME)).toBe(true)
+    expect(isStakeTxFor(t(STAKING_CONTRACT, ME), ME)).toBe(true)
+    expect(isStakeTxFor(t(OTHER, STAKING_CONTRACT, [OTHER, STAKING_CONTRACT]), ME)).toBe(false)
+    expect(isStakeTxFor(t(OTHER, ME, [OTHER, ME]), ME)).toBe(false)
+  })
+  it('everStaked finds a stake made for the wallet by another address', async () => {
+    const page = async () => [t(OTHER, ME), t(OTHER, STAKING_CONTRACT, [ME])]
+    expect(await everStaked(page, ME)).toBe(true)
+  })
+})

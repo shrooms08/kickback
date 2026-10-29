@@ -16,23 +16,34 @@ export function dailyStakeXp(activeNim: number): number {
 
 export const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10)
 
-/** Invite XP waits until the invitee kept a stake on each of the 7 UTC days after the claim day. */
+/** Invite XP waits until the invitee kept a stake for 7 UTC days, starting within 7 days of the claim. */
 export const INVITE_KEEP_DAYS = 7
 const DAY_MS = 864e5
 
 /**
- * Has an invitee kept a real stake (daily snapshots of at least minLuna) for the 7 days after
- * claiming the code, and still has it today? 'wait' = not yet (or not today), 'never' = a day of
- * that week was below the minimum or more than one day has no snapshot (stake before the claim
- * never counts). One missing day is tolerated (a cron outage).
+ * Has an invitee kept a real stake (daily snapshots of at least minLuna) for 7 days, starting on
+ * the first day after the claim with such a stake (a day's snapshot can be taken before that
+ * day's stake; the start must fall within the 7 days after the claim), and still has it today?
+ * 'wait' = not yet (or not today), 'never' = no stake started in time, a day of the week was below
+ * the minimum, or more than one day of it has no snapshot. Stake before the claim never counts.
+ * One missing day is tolerated (a cron outage).
  */
 export function inviteStakeKept(claimedAt: number, now: number, snaps: Array<{ day: string, active_luna: number }>, minLuna: number): 'wait' | 'yes' | 'never' {
   if (now < claimedAt + INVITE_KEEP_DAYS * DAY_MS) return 'wait'
   const byDay = new Map(snaps.map(x => [x.day, Number(x.active_luna)]))
   const today = utcDay(now)
+  const dayAfter = (i: number) => utcDay(claimedAt + i * DAY_MS)
+  let start = 0
+  for (let i = 1; i <= INVITE_KEEP_DAYS && !start; i++) {
+    const v = byDay.get(dayAfter(i))
+    if (v !== undefined && v >= minLuna) start = i
+    else if (v === undefined && dayAfter(i) === today) return 'wait'
+  }
+  if (!start) return 'never'
   let held = 0
-  for (let i = 1; i <= INVITE_KEEP_DAYS; i++) {
-    const day = utcDay(claimedAt + i * DAY_MS), v = byDay.get(day)
+  for (let i = start; i < start + INVITE_KEEP_DAYS; i++) {
+    const day = dayAfter(i), v = byDay.get(day)
+    if (day > today) return 'wait'
     if (v === undefined) { if (day === today) return 'wait'; continue }
     if (v < minLuna) return 'never'
     held++

@@ -76,3 +76,25 @@ describe('rpc-proxy hardening (audit)', () => {
     expect(checkProxyRequest(req('getBlockByNumber', [5, true])).ok).toBe(false)
   })
 })
+
+describe('client IP: IPv6 callers are keyed by their /64 (review L2)', () => {
+  const ip = (v: string, header = 'cf-connecting-ip') => clientIp(new Headers({ [header]: v }))
+  it('one /64 is one key, however the address is written', () => {
+    expect(ip('2001:db8:1:2:3:4:5:6')).toBe('2001:db8:1:2::/64')
+    expect(ip('2001:DB8:1:2::5')).toBe('2001:db8:1:2::/64')
+    expect(ip('2001:0db8:0001:0002:ffff::1')).toBe('2001:db8:1:2::/64')
+    expect(ip('[2001:db8:1:2::9]')).toBe('2001:db8:1:2::/64')
+    expect(ip('fe80::1%eth0')).toBe('fe80:0:0:0::/64')
+  })
+  it('different /64s stay apart', () => {
+    expect(ip('2001:db8::1')).toBe('2001:db8:0:0::/64')
+    expect(ip('2001:db8:0:1::1')).not.toBe(ip('2001:db8:0:2::1'))
+  })
+  it('IPv4 (also IPv4-mapped IPv6) stays the plain IPv4 address', () => {
+    expect(ip('203.0.113.5')).toBe('203.0.113.5')
+    expect(ip('::ffff:203.0.113.5')).toBe('203.0.113.5')
+  })
+  it('the x-forwarded-for fallback is normalised too', () => {
+    expect(ip('9.9.9.9, 2001:db8:5:6:7::1', 'x-forwarded-for')).toBe('2001:db8:5:6::/64')
+  })
+})

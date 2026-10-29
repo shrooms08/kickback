@@ -32,7 +32,7 @@ Supabase is the source of truth for plans, contacts and processed shares. localS
 | `users` | address, network, created_at, last_seen_at (unique address + network) | functions only |
 | `plans` | address, network, slices (jsonb: type, percent, contact_id), plan_started_at, updated_at | functions only |
 | `contacts` | id, address, network, name, contact_address, created_at (unique owner + network + contact_address) | functions only |
-| `shares` | id (uuid), address, network, amount_luna (bigint), slice_type, tx_hash (null for Keep), status (confirmed / undone), created_at | functions only |
+| `shares` | id (uuid), address, network, amount_luna (bigint), slice_type, tx_hash (null for Keep), status (confirmed / undone), created_at, reported_at (server time of the last tx, amount or type change) | functions only |
 | `pool_stats` | network, validator_address, name, fee, reward_address, last_payout_at, median_interval_s, next_payout_estimate_at, payout_kind, active, elected, score, score_status, listed, payout_schedule, updated_at | **public read** |
 | `events` | address (null when not signed in), network, kind, amount_luna (bigint), created_at | functions only |
 | `auth_nonces` | nonce, address, network, created_at, used_at | functions only |
@@ -72,14 +72,25 @@ Secrets: `SESSION_SECRET` (set with `supabase secrets set`), plus `SUPABASE_URL`
 | Secret | Default | Counts |
 |---|---|---|
 | `AUTH_NONCE_IP_MAX` | 30 per 10 min | nonces per caller IP |
-| `AUTH_NONCE_ADDRESS_MAX` | 10 per 10 min | nonces per wallet address |
+| `AUTH_NONCE_ADDRESS_MAX` | 10 per 10 min | nonces per wallet address from one caller IP (so nobody can lock an address out) |
+| `AUTH_NONCE_GLOBAL_MAX` | 3000 per 10 min | nonces for everyone together (bounds how many can pile up) |
 | `AUTH_VERIFY_IP_MAX` | 30 per 10 min | sign-in attempts per caller IP |
 | `SYNC_ANON_EVENTS_IP_MAX` | 20 per hour | events without a session, per caller IP |
 | `SYNC_EVENTS_ADDRESS_MAX` | 120 per hour | events per signed-in wallet |
 | `RPC_PROXY_IP_MAX` | 60 per minute | rpc-proxy calls per caller IP (also kept per isolate) |
 | `RPC_PROXY_GLOBAL_MAX` | 60 per minute | rpc-proxy calls that reach the upstream nodes, everyone together (half the public node's per-IP budget, so the crons keep theirs) |
+| `RPC_PROXY_IP_UPSTREAM_MAX` | 10 per minute | of those upstream calls, per caller IP (one caller can't use the whole global cap) |
+| `SEASON_WALLET_MAX` | 60 per 10 min | season reads per wallet |
+| `SEASON_IP_MAX` | 300 per 10 min | season reads per caller IP |
+| `INVITE_CLAIM_WALLET_MAX` | 5 per hour | invite code claims per wallet |
+| `INVITE_CLAIM_IP_MAX` | 20 per hour | invite code claims per caller IP |
+| `SHARES_WALLET_MAX` | 60 per 10 min | share reports per wallet |
+| `SHARES_IP_MAX` | 300 per 10 min | share reports per caller IP |
+| `SERVER_RPC_GLOBAL_MAX` | 60 per minute | chain calls season and sync make for users, everyone together (over it they answer from the stored state: chainOk false, shares stay unverified and are rechecked later); the crons don't count here |
 
-The caller IP is `cf-connecting-ip` (Cloudflare sits in front of the Supabase gateway and sets it itself, replacing any value a caller sends), else the last `x-forwarded-for` hop (the local stack). `x-real-ip` and the first `x-forwarded-for` hop can be written by the caller and are never used. Over a limit the function answers 429.
+The caller IP is `cf-connecting-ip` (Cloudflare sits in front of the Supabase gateway and sets it itself, replacing any value a caller sends), else the last `x-forwarded-for` hop (the local stack). `x-real-ip` and the first `x-forwarded-for` hop can be written by the caller and are never used. IPv6 callers are keyed by their /64. Over a limit the function answers 429.
+
+season reads the chain at most once a minute per wallet: the read that wins the minute (a conditional update of `chain_scan.scanned_at`) does the chain work, parallel reads answer from the database. An invite claim is recorded before its chain check, so parallel claims lose on the unique invitee and the history is read once.
 
 ## Cron (pg_cron + pg_net)
 
@@ -112,8 +123,9 @@ The RPC client keeps under the public node's limit (14 of 20 units per 10 s) and
 - **Shares count only when verified on chain:** the tx exists, executed, in a block, sent by the signed-in wallet, to a saved contact (send) or the staking contract (restake), for exactly the claimed amount. One tx proves one share (unique index); a verified stake tx can't also be a share. Editing a share's tx, amount or type clears its proof (trigger). The verify update only applies to the row exactly as checked.
 - **Runs:** shares grouped by `run_id`, after `plan_started_at`, and a run counts only when a kickback (payout from a direct pool in `pool_stats`) landed since the last counted run. Shared NIM for milestones is capped at the kickbacks that landed.
 - **Streak:** a kickback is shared on time when a counted run lands within 24h; one saver per ISO week (Monday 00:00 UTC); kickbacks before the plan started are ignored.
-- **Invites:** one inviter per wallet; not your own code; it counts only if the invitee had never staked before claiming: no stake the server ever saw (stake snapshots, the scan's staked flag, a verified stake event), no stake now, and nothing to or from the staking contract in the whole tx history (read 100 at a time, up to 2,000 txs; a longer history counts as "has staked"). Invite XP (+500, at most 10 a season) comes only once the invitee had a stake of 10+ NIM on each of the 7 UTC days after the claim day (one day without a snapshot is tolerated; a day below 10 NIM means never) and still has it today; it is awarded on the inviter's first season read after that.
+- **Invites:** one inviter per wallet; not your own code; it counts only if the invitee had never staked before claiming: no stake the server ever saw (stake snapshots, the scan's staked flag, a verified stake event), no stake now, and nothing to or from the staking contract in the whole tx history (read 100 at a time, up to 2,000 txs; a longer history counts as "has staked"). A tx counts as staking when the staking contract is one end and the wallet is the other end or among its `relatedAddresses`. Invite XP (+500) comes only once the invitee kept a stake of 10+ NIM for 7 UTC days, starting on the first day after the claim whose snapshot shows it (within 7 days of the claim; one day without a snapshot is tolerated; a day below 10 NIM means never), and still has it today; it is awarded on the inviter's first season read after that. The cap of 10 a season is enforced by the database: invite rows take a slot ref `invite#1`..`invite#10` (CHECK) with the invitee as proof (unique), so parallel reads can't pass it.
 - **Restakes** verify only if the stake tx is no older than the latest kickback that had landed when the share was reported (an older stake shares nothing new).
+- **Reported time:** `shares.reported_at` is set by the server on insert and again whenever a share's tx, amount or type change (trigger). The restake rule uses it, and run and share XP need the tx's block time within 24 hours of it, either way.
 - **XP:** see `supabase/functions/_shared/xp.ts` (amounts, caps, tiers, quests, season clock) and `xpAward.ts` (awards). XP resets per season; unlocks stay.
 - Unverified shares are rechecked at most 10 times within 48h, at most 50 waiting per wallet. Function RPC calls time out after 8 s and don't sleep on 429: the stored state is returned with `chainOk: false`.
 

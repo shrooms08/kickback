@@ -32,9 +32,27 @@ export function checkProxyRequest(body: unknown): ProxyCheck {
  */
 export function clientIp(h: Headers): string {
   const cf = h.get('cf-connecting-ip')?.trim()
-  if (cf) return cf
+  if (cf) return ipKey(cf)
   const hops = (h.get('x-forwarded-for') ?? '').split(',').map(s => s.trim()).filter(Boolean)
-  return hops[hops.length - 1] ?? 'unknown'
+  return hops.length ? ipKey(hops[hops.length - 1]) : 'unknown'
+}
+
+/**
+ * The rate-limit key of an IP: IPv4 as it is, IPv6 as its /64 (one subscriber usually gets a
+ * whole /64, so per-address keys would be free to rotate). IPv4-mapped IPv6 is plain IPv4.
+ * Anything that doesn't parse is kept as written.
+ */
+export function ipKey(raw: string): string {
+  const a = raw.trim().replace(/^\[|\]$/g, '').replace(/%.*$/, '').toLowerCase()
+  if (!a.includes(':')) return a
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a)
+  if (mapped) return mapped[1]
+  const parts = a.split('::')
+  if (parts.length > 2) return a
+  const head = parts[0] ? parts[0].split(':') : [], tail = parts.length === 2 && parts[1] ? parts[1].split(':') : []
+  const groups = parts.length === 2 ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail] : head
+  if (groups.length !== 8 || !groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) return a
+  return groups.slice(0, 4).map(g => g.replace(/^0+(?=.)/, '')).join(':') + '::/64'
 }
 
 /** Fixed-window counter per key (IP). When full, expired windows are evicted (never a global reset). */

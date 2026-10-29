@@ -16,11 +16,11 @@ async function recipientsFor(row: ShareRow): Promise<string[]> {
   return (data ?? []).map((c: { contact_address: string }) => c.contact_address)
 }
 
-/** When the app reported the share (the server's own time). */
+/** When the app reported the share as it is now (server time; reset when its tx, amount or type change). */
 async function reportedAt(row: ShareRow): Promise<number> {
-  const { data, error } = await db.from('shares').select('created_at').eq('id', row.id).maybeSingle()
+  const { data, error } = await db.from('shares').select('reported_at').eq('id', row.id).maybeSingle()
   if (error) throw error
-  return data ? Date.parse(data.created_at) : Date.now()
+  return data ? Date.parse(data.reported_at) : Date.now()
 }
 
 /** The wallet's latest known kickback (found on chain by the season scan), as a list of 0 or 1 times. */
