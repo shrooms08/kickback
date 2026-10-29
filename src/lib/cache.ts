@@ -64,10 +64,25 @@ export function prefGet(key: string): string | null {
   try { return localStorage.getItem(`kb:${NS}` + key) }
   catch { return null }
 }
-export function prefSet(key: string, value: string | null) {
-  try {
+/** Keys that must reach storage before money moves: plans and ledgers, ops, runs. */
+const CRITICAL = /^(plan|ops|run):/
+const failed = new Set<string>()
+/** False while a plan, op or run write is failing (storage full): money actions wait. */
+export function storageOk(): boolean { return failed.size === 0 }
+
+/** Write a preference. A full storage gets cache entries pruned and one more try. Returns success. */
+export function prefSet(key: string, value: string | null): boolean {
+  const write = () => {
     if (value === null) localStorage.removeItem(`kb:${NS}` + key)
     else localStorage.setItem(`kb:${NS}` + key, value)
   }
-  catch { /* ignore */ }
+  let ok = false
+  try { write(); ok = true }
+  catch {
+    pruneCache(0.5)
+    try { write(); ok = true }
+    catch { /* still full or unavailable */ }
+  }
+  if (CRITICAL.test(key)) { if (ok) failed.delete(key); else failed.add(key) }
+  return ok
 }

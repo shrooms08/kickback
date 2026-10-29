@@ -46,6 +46,11 @@ beforeEach(() => {
   tx.send.mockResolvedValue({ status: 'rejected' })
 })
 
+/** The plan still sends to TO and the failed amount is still ready to share. */
+const readyFor = (s: Awaited<ReturnType<typeof setup>>) => {
+  s.plan.$patch({ planStartedAt: Date.now() - 1000, contacts: [{ id: 'c1', name: 'Ada', ini: 'A', address: TO }], saved: [100, 0, 0], savedRecipient: 'c1' })
+  s.account.$patch({ readyLuna: 100_000 })
+}
 const failedRun = (runDry?: boolean) => ({
   runPhase: 'done' as const, doneMode: 'partial' as const, runAmountLuna: 100_000,
   steps: [{ type: 'send' as const, luna: 100_000, amt: 1, recipient: TO, label: 'Send 1.00 NIM to Ada', st: 'failed' as const, runId: 'r1' }],
@@ -75,6 +80,7 @@ describe('audit 2: a dry-run run is never retried for real', () => {
   })
   it('retries a real run in real mode', async () => {
     const s = await setup({ dry: false })
+    readyFor(s)
     s.flow.$patch(failedRun(false))
     await s.money.retryRunLive()
     expect(tx.send).toHaveBeenCalledTimes(1)
@@ -145,6 +151,7 @@ describe('audit 3: a second hold while the first is still starting does nothing'
   })
   it('retry', async () => {
     const s = await setup()
+    readyFor(s)
     s.flow.$patch(failedRun(false))
     const go = slowBalance(s)
     const a = s.money.retryRunLive(), b = s.money.retryRunLive()

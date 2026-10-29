@@ -130,8 +130,8 @@ export const usePlan = defineStore('plan', {
       const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}), ...(this.counted.items.length || this.counted.foldedLuna ? { counted: this.counted } : {}) }
       const json = JSON.stringify(d)
       if (json === lastWritten) return
-      lastWritten = json
-      prefSet('plan:' + this.owner.replace(/\s/g, ''), json)
+      // Remembered only once stored, so a failed write (storage full) is tried again next time.
+      if (prefSet('plan:' + this.owner.replace(/\s/g, ''), json)) lastWritten = json
     },
     /** Persist automatically on any change (drag moves only touch the editor copy, so they don't write). */
     autoPersist() {

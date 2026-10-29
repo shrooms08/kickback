@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { logMoney } from '../lib/moneylog'
 import { prefGet, prefSet } from '../lib/cache'
-import { DRY_CHECK_WINDOW_MS, UNCERTAIN_HOLD_MS, UNKNOWN, findOnChain, searchWide, send, waitIncluded } from '../services/tx'
+import { DRY_CHECK_WINDOW_MS, UNCERTAIN_HOLD_MS, UNKNOWN, VALIDITY_MS, findOnChain, searchWide, send, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
 import { usePlan } from './plan'
@@ -42,6 +42,8 @@ export interface Op {
   checkLeft?: number
   /** When an uncertain error happened (it may have gone out): nothing is re-sent for 10 minutes after. */
   uncertainAt?: number
+  /** Declined with a cancel name the SDK doesn't define: a retry checks the chain first. */
+  softCancel?: boolean
   /**
    * Flow details. Switch: old pool, when it takes effect. Run: step index, `luna`, `type`
    * (send / restake) and `runId`, so the share is recorded when it settles, even after a restart.
@@ -74,9 +76,20 @@ export function ledgerHashes(): Set<string> {
   return new Set(usePlan().ledger.map(e => e.hash).filter((h): h is string => !!h))
 }
 
+/** An uncertain "not sent" run op whose transaction could still be included (and isn't replaced or released). */
+export function isHeld(o: Op, now = Date.now()): boolean {
+  return o.flow === 'run' && o.phase === 'not-sent' && o.uncertainAt != null && now - o.uncertainAt < VALIDITY_MS && !o.meta?.superseded && !o.meta?.released
+}
+
+/** Luna kept out of Ready to share: run ops in flight, and uncertain ones that may still land. */
+export function heldLuna(ops: readonly Op[], dry: boolean, now = Date.now()): number {
+  return ops.filter(o => o.dry === dry && o.flow === 'run' && (!TERMINAL.includes(o.phase) || isHeld(o, now))).reduce((a, o) => a + o.req.value, 0)
+}
+
 function recordRunShare(op: Op) {
   const m = op.meta
-  if (op.flow !== 'run' || op.phase !== 'confirmed' || !m || typeof m.luna !== 'number') return
+  // A payment signed from another account is not this wallet's share.
+  if (op.flow !== 'run' || op.phase !== 'confirmed' || !m || typeof m.luna !== 'number' || m.foreign) return
   const id = isUuid(op.id) ? op.id : String(m.shareId)
   usePlan().recordShared(m.luna, op.hash, op.dry, m.type === 'restake' ? 'restake' : 'send', typeof m.runId === 'string' ? m.runId : undefined, id)
 }
@@ -91,6 +104,8 @@ export const useOps = defineStore('ops', {
     address: '', ops: [] as Op[],
     /** A sent transaction came from another account than `address` (the signer it was from): no more sends. */
     signerMismatch: '' as string,
+    /** A sent transaction proved Nimiq Pay signs from `address`: later steps needn't wait for it. */
+    signerOk: false,
   }),
   getters: {
     byId: s => (id?: string) => s.ops.find(o => o.id === id),
@@ -105,11 +120,14 @@ export const useOps = defineStore('ops', {
       try { this.ops = JSON.parse(prefGet(this.key(address)) || '[]') }
       catch { this.ops = [] }
       this.signerMismatch = prefGet(this.key(address) + ':signer') || ''
+      this.signerOk = prefGet(this.key(address) + ':signerok') === '1'
     },
     save() {
       if (!this.address) return
-      const dayAgo = Date.now() - 24 * 3600e3
-      const keep = this.ops.filter(o => !TERMINAL.includes(o.phase) || o.startedAt > dayAgo).slice(-40)
+      // Every op still in flight or held is kept; finished ones for a day, at most 40.
+      const now = Date.now(), dayAgo = now - 24 * 3600e3
+      const done = new Set(this.ops.filter(o => TERMINAL.includes(o.phase) && !isHeld(o, now) && o.startedAt > dayAgo).slice(-40))
+      const keep = this.ops.filter(o => (!TERMINAL.includes(o.phase) || isHeld(o, now)) || done.has(o))
       prefSet(this.key(this.address), JSON.stringify(keep))
     },
     patch(id: string, p: Partial<Op>) {
@@ -143,7 +161,7 @@ export const useOps = defineStore('ops', {
           this.patch(op.id, { phase: 'confirming', hash: r.hash, sentAt: Date.now() })
           await this.confirm(op.id)
         }
-        else if (r.status === 'rejected') this.patch(op.id, { phase: 'rejected' })
+        else if (r.status === 'rejected') this.patch(op.id, { phase: 'rejected', ...(r.soft ? { softCancel: true } : {}) })
         else if (r.status === 'not-sent') this.patch(op.id, { phase: 'not-sent', error: r.error })
         else await this.check(op.id, r.error)
       }
@@ -160,8 +178,8 @@ export const useOps = defineStore('ops', {
       if (!op) return
       this.patch(id, { phase: 'checking', error, uncertainAt: op.uncertainAt ?? Date.now() })
       const windowMs = op.dry ? DRY_CHECK_WINDOW_MS : Math.max(0, op.uncertainAt! + UNCERTAIN_HOLD_MS - Date.now())
-      let hash = await findOnChain(op.address, op.req, op.startedAt, left => this.patch(id, { checkLeft: Math.ceil(left / 1000) }), { windowMs })
-      if (hash === null && !op.dry) hash = await searchWide(op.address, op.req, op.startedAt, ledgerHashes())
+      let hash = await findOnChain(op.address, op.req, op.startedAt, left => this.patch(id, { checkLeft: Math.ceil(left / 1000) }), { windowMs, skip: this.knownHashes(id) })
+      if (hash === null && !op.dry) hash = await searchWide(op.address, op.req, op.startedAt, this.knownHashes(id))
       if (hash === UNKNOWN) {
         // The chain couldn't be read: it may have gone out. Stay "checking" (still in flight, no
         // re-send offered) and look again in 30 s, until a node can say for sure.
@@ -207,14 +225,47 @@ export const useOps = defineStore('ops', {
     checkSigner(op: Op, tx: Tx) {
       if (op.dry || !this.address) return
       const ours = op.req.kind === 'remove' ? sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, op.address) : sameAddr(tx.from, op.address)
-      if (ours || this.signerMismatch) return
+      if (ours) {
+        if (!this.signerOk) { this.signerOk = true; prefSet(this.key(this.address) + ':signerok', '1') }
+        return
+      }
+      op.meta = { ...op.meta, foreign: 1 }
+      if (this.signerMismatch) return
       this.signerMismatch = op.req.kind === 'remove' ? tx.to : tx.from
       prefSet(this.key(this.address) + ':signer', this.signerMismatch)
       useUi().showToast(MISMATCH)
     },
 
+    /** Hashes that belong to something else (shared, or another op): never this op's transaction. */
+    knownHashes(id: string): Set<string> {
+      const s = ledgerHashes()
+      for (const o of this.ops) if (o.id !== id && o.hash) s.add(o.hash)
+      return s
+    },
+
+    /**
+     * An uncertain amount is held until its transaction can no longer be included. Then one last
+     * deep search: found means it went out late (followed and recorded), otherwise it is released.
+     */
+    async sweepUncertain() {
+      const now = Date.now()
+      for (const op of this.ops) {
+        if (op.flow !== 'run' || op.phase !== 'not-sent' || op.uncertainAt == null || op.meta?.superseded || op.meta?.released) continue
+        if (now - op.uncertainAt < VALIDITY_MS || running.has(op.id)) continue
+        running.add(op.id)
+        try {
+          const hash = await searchWide(op.address, op.req, op.startedAt, this.knownHashes(op.id))
+          if (hash === UNKNOWN) continue
+          if (hash) { running.delete(op.id); this.adopt(op.flow, op.req, op.address, hash, op.meta, op.id); continue }
+          this.patch(op.id, { meta: { ...op.meta, released: 1 } })
+        }
+        finally { if (this.byId(op.id)?.phase !== 'confirming') running.delete(op.id) }
+      }
+    },
+
     /** After a restart: continue checking anything that was in flight. Never re-sends. */
     resume() {
+      void this.sweepUncertain()
       for (const op of this.ops) {
         if (running.has(op.id) || TERMINAL.includes(op.phase)) continue
         running.add(op.id)

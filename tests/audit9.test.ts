@@ -55,7 +55,7 @@ describe('cancel codes', () => {
   it('every way the SDK says the user declined is "You cancelled"', async () => {
     const { classify } = await import('../src/services/nimiq')
     for (const type of ['PERMISSION_DENIED', 'USER_REJECTED', 'USER_CANCELLED', 'USER_CANCELED', 'CANCELLED', 'CANCELED', 'REJECTED', 'ACTION_REJECTED'])
-      expect(classify({ name: 'NimiqProviderError', type, message: 'x' })).toEqual({ status: 'rejected' })
+      expect(classify({ name: 'NimiqProviderError', type, message: 'x' })).toMatchObject({ status: 'rejected' })
     expect(classify({ name: 'NimiqProviderError', type: 'UNKNOWN_ERROR', code: 4001, message: 'x' })).toEqual({ status: 'rejected' })
     expect(classify({ name: 'NimiqProviderError', type: 'NETWORK_ERROR', message: 'x' }).status).toBe('unknown')
     expect(classify({ name: 'NimiqProviderError', type: 'TRANSACTION_OUTCOME_UNKNOWN', message: 'x' }).status).toBe('unknown')

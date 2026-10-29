@@ -11,6 +11,13 @@ import { useDry } from '../stores/dry'
 export const CHECK_WINDOW_MS = 60_000
 /** After an uncertain error nothing is offered again for this long ("Still checking if it went through"). */
 export const UNCERTAIN_HOLD_MS = 10 * 60_000
+/**
+ * A signed Nimiq transaction can still be included for about 7,200 blocks (~2 h) after it was
+ * made. Until then (plus a margin) an uncertain amount stays held back from Ready to share.
+ */
+export const VALIDITY_MS = 2 * 3600e3 + 15 * 60_000
+/** Block times are compared with the phone's clock, which can be off: allow this much. */
+export const MATCH_SLACK_MS = 15 * 60_000
 export const DRY_CHECK_WINDOW_MS = 10_000
 export const CONFIRM_POLL_MS = 4_000
 export const SLOW_AFTER_MS = 120_000
@@ -39,9 +46,7 @@ export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, m
   if (tx.executionResult === false) return false
   switch (req.kind) {
     case 'payment':
-      // Same recipient, value and data. A source without the data field (REST) can't rule it out.
-      return sameAddr(tx.from, me) && sameAddr(tx.to, req.recipient) && tx.value === req.value
-        && (tx.recipientData == null || tx.recipientData.toLowerCase() === (req.data ? utf8Hex(req.data) : ''))
+      return sameAddr(tx.from, me) && paidAs(tx, req)
     case 'remove':
       // Paid out of the staking contract to us; a fee could come out of the value.
       return sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, me) && tx.value <= req.value && tx.value >= req.value - 100_000
@@ -55,6 +60,16 @@ export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, m
   }
 }
 
+/**
+ * Same recipient, value and data (from any sender). Data only rules a transaction out when it is
+ * there and clearly different: missing a match would mean sending twice.
+ */
+function paidAs(tx: Tx & { recipientData?: string }, req: SendRequest): boolean {
+  if (!sameAddr(tx.to, req.recipient) || tx.value !== req.value || tx.executionResult === false) return false
+  const rd = (tx.recipientData ?? '').toLowerCase()
+  return !rd || (req.data ? rd.includes(utf8Hex(req.data)) : false)
+}
+
 /** The chain couldn't be read reliably: never conclude "not sent" from that. */
 export const UNKNOWN = Symbol('unknown')
 
@@ -65,7 +80,8 @@ export const UNKNOWN = Symbol('unknown')
  * answered and it isn't there, UNKNOWN if nothing (or only the REST indexer or the
  * proxy, which can lag) could be read: the caller keeps checking and never offers a re-send.
  */
-export async function findOnChain(me: string, req: SendRequest, since: number, onTick?: (msLeft: number) => void, opts: { windowMs?: number } = {}): Promise<string | null | typeof UNKNOWN> {
+export async function findOnChain(me: string, req: SendRequest, since: number, onTick?: (msLeft: number) => void, opts: { windowMs?: number, skip?: ReadonlySet<string> } = {}): Promise<string | null | typeof UNKNOWN> {
+  const skip = opts.skip ?? new Set<string>()
   const dry = useDry()
   const window = opts.windowMs ?? (dry.on ? DRY_CHECK_WINDOW_MS : CHECK_WINDOW_MS)
   let directReads = 0
@@ -78,7 +94,7 @@ export async function findOnChain(me: string, req: SendRequest, since: number, o
     else {
       try {
         const r = await rpc<Tx[]>('getTransactionsByAddress', [me, 25, null], { noStore: true })
-        const hit = (r.value || []).find(t => t.timestamp >= since - 30_000 && matches(t, req, me))
+        const hit = (r.value || []).find(t => t.timestamp >= since - MATCH_SLACK_MS && !skip.has(t.hash) && matches(t, req, me))
         if (hit) return hit.hash
         if (rpcSource(r.value) === 'direct') directReads++
       }
@@ -103,14 +119,14 @@ export async function searchWide(me: string, req: SendRequest, since: number, sk
   const dry = useDry()
   if (dry.on) return dry.findSince(req, since)
   const ok = (t: Tx & { recipientData?: string }) => !skipHashes.has(t.hash) && matches(t, req, me)
-  const deep = Math.min(since - 30_000, Date.now() - 2 * 3600e3)
+  const deep = Math.min(since - MATCH_SLACK_MS, Date.now() - 2 * 3600e3)
   let read = 0, startAt: string | null = null, historyDirect = true
   try {
     for (let page = 0; page < 5; page++) {
       const r: { value: Tx[] } = await rpc<Tx[]>('getTransactionsByAddress', [me, 100, startAt], { noStore: true })
       const list = r.value || []
       if (rpcSource(r.value) !== 'direct') historyDirect = false
-      const hit = list.find(t => t.timestamp >= since - 30_000 && ok(t))
+      const hit = list.find(t => t.timestamp >= since - MATCH_SLACK_MS && ok(t))
       if (hit) return hit.hash
       read += list.length
       const oldest = list[list.length - 1]
@@ -119,10 +135,20 @@ export async function searchWide(me: string, req: SendRequest, since: number, sk
     }
   }
   catch { return UNKNOWN }
+  // A payment Nimiq Pay signed from another account never shows in this address's history:
+  // look at the recipient's side too (the signer check then stops further sends).
+  if (req.kind === 'payment' && req.recipient) {
+    try {
+      const r = await rpc<Tx[]>('getTransactionsByAddress', [req.recipient, 100, null], { noStore: true })
+      const hit = (r.value || []).find(t => t.timestamp >= since - MATCH_SLACK_MS && !skipHashes.has(t.hash) && paidAs(t, req))
+      if (hit) return hit.hash
+    }
+    catch { return UNKNOWN }
+  }
   let pending: Array<Tx & { recipientData?: string }>
   try { pending = (await rpc<Array<Tx & { recipientData?: string }>>('mempoolContent', [true], { noStore: true })).value || [] }
   catch { return UNKNOWN }
-  const hit = pending.find(t => typeof t === 'object' && ok({ ...t, executionResult: undefined }))
+  const hit = pending.find(t => typeof t === 'object' && !skipHashes.has(t.hash) && (matches({ ...t, executionResult: undefined }, req, me) || (req.kind === 'payment' && paidAs({ ...t, executionResult: undefined }, req))))
   if (hit) return hit.hash
   return historyDirect ? null : UNKNOWN
 }

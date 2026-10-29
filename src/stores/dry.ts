@@ -145,7 +145,7 @@ export const useDry = defineStore('dry', {
     },
     /** Fake chain search after an uncertain send. */
     findSince(req: SendRequest, since: number): string | null {
-      const tx = this.txs.find(x => x.lands && x.sentAt >= since - 1000 && x.req.kind === req.kind && x.req.value === req.value)
+      const tx = this.txs.find(x => x.lands && x.sentAt >= since - 1000 && x.req.kind === req.kind && x.req.value === req.value && x.req.recipient === req.recipient)
       return tx ? tx.hash : null
     },
   },

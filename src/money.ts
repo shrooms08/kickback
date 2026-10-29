@@ -18,7 +18,7 @@ import { useWallet } from './stores/wallet'
 import { useFlow } from './stores/flow'
 import type { RunStep, StepState } from './stores/flow'
 import { useData } from './stores/data'
-import { ledgerHashes, useOps, TERMINAL } from './stores/ops'
+import { isHeld, useOps, TERMINAL } from './stores/ops'
 import type { Op, OpFlow } from './stores/ops'
 import { currentStaker, useLive } from './stores/live'
 import { useDry } from './stores/dry'
@@ -30,7 +30,7 @@ import { checkStake, maxStake, parseNimInput, runAmount, splitLuna, spendable } 
 import { nim2 } from './lib/format'
 import { span } from './lib/time'
 import { fxStep } from './lib/fx'
-import { prefGet, prefSet } from './lib/cache'
+import { prefGet, prefSet, storageOk } from './lib/cache'
 import { isValidAddress } from './lib/address'
 import { isTestnet } from './lib/net'
 
@@ -91,6 +91,8 @@ export const moneyLocked = () => moneyLock.value != null
 
 function acquire(name: string): (() => void) | null {
   if (moneyLock.value) { useUi().showToast('Still starting. Nothing was sent twice.'); return null }
+  // What is sent must be remembered: with storage full a restart could forget a share.
+  if (!storageOk()) { useUi().showToast('Your phone\'s storage is full, so Kickback can\'t save what it sends. Free some space, then try again.'); return null }
   moneyLock.value = name
   let released = false
   return () => { if (released) return; released = true; moneyLock.value = null }
@@ -113,6 +115,7 @@ export function moneyBusy(): boolean {
 export function setDryMode(on: boolean): boolean {
   if (moneyBusy()) { useUi().showToast('Wait until your plan or stake finishes.'); return false }
   useDry().toggle(on)
+  restoreRun() // show (and keep saving) this mode's own run
   return true
 }
 
@@ -430,6 +433,17 @@ async function walkSteps(from: number) {
     }
     if (op.phase === 'confirming' || op.phase === 'confirmed') {
       if (s.type === 'send' || s.type === 'restake') fxStep(s.type)
+      // Until one transaction has shown who signed it, the next step waits for this one's block.
+      const ops = useOps()
+      if (!op.dry && !ops.signerOk) {
+        await untilNot(id, ['confirming'])
+        if (ops.signerMismatch) {
+          flow.steps = flow.steps.map((x, j) => j > i && x.st === 'pending' ? { ...x, st: 'skipped' } : x)
+          persistRun()
+          syncRunSteps()
+          return
+        }
+      }
       // Recorded as shared by the ops store once it is in a block; failures stay ready to share.
       done.then(() => { syncRunSteps(); maybeFinish() })
     }
@@ -485,10 +499,21 @@ async function retryLocked(release: () => void) {
     syncRunSteps()
     return
   }
+  // Pay only contacts still in the plan, at the address it has now.
+  const sendTo = usePlan().slices.find(x => x.kind === 'send')
+  const plannedTo = sendTo?.kind === 'send' ? sendTo.contact.address : undefined
+  if (todo.some(({ s }) => s.type === 'send' && !sameAddr(s.recipient, plannedTo))) return ui.showToast('Your plan changed since this run. Close it and run your plan again.')
+  const ops = useOps()
   const need = todo.reduce((a, { s }) => a + (s.type === 'keep' ? 0 : s.luna ?? 0), 0)
+  // Still ready to share (another phone may have shared it meanwhile). Amounts held back for
+  // these steps' own uncertain attempts count as theirs.
+  const held = todo.reduce((a, { s }) => { const o = s.opId ? ops.byId(s.opId) : undefined; return a + (o && isHeld(o) ? o.req.value : 0) }, 0)
+  if (need > useAccount().readyLuna + held) return ui.showToast('That amount isn\'t ready to share any more. Close this run and check Home.')
   const bal = await freshBalanceOrToast()
   if (bal == null) return
   if (need > spendable(bal)) return ui.openSheet('fees')
+  // The old uncertain attempts are replaced by this retry: they stop holding the amount.
+  for (const { s } of todo) { const o = s.opId ? ops.byId(s.opId) : undefined; if (o && isHeld(o)) ops.patch(o.id, { meta: { ...o.meta, superseded: 'retry' } }) }
   flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry, steps: flow.steps.map(s => again(s.st) ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
   persistRun()
   release()
@@ -504,10 +529,13 @@ async function retryLocked(release: () => void) {
 async function recheckUnsure(todo: Array<{ s: RunStep, i: number }>): Promise<Set<number> | 'blocked'> {
   const ops = useOps(), ui = useUi()
   const found = new Set<number>()
+  const plan = usePlan()
   for (const { s, i } of todo) {
     if (s.type === 'keep' || !s.opId) continue
+    // Already recorded under this step's op id: it went out.
+    if (plan.ledger.some(e => e.id === s.opId)) { setStep(i, { st: 'approved' }); found.add(i); continue }
     const op = ops.byId(s.opId)
-    if (op && !(op.phase === 'not-sent' && op.uncertainAt != null)) continue
+    if (op && !(op.phase === 'not-sent' && op.uncertainAt != null) && !(op.phase === 'rejected' && op.softCancel)) continue
     if (op?.uncertainAt && Date.now() - op.uncertainAt < UNCERTAIN_HOLD_MS && !op.dry) {
       const min = Math.max(1, Math.ceil((op.uncertainAt + UNCERTAIN_HOLD_MS - Date.now()) / 60e3))
       ui.showToast(`Still checking if it went through. You can retry in about ${min} min. Nothing was sent twice.`)
@@ -515,7 +543,7 @@ async function recheckUnsure(todo: Array<{ s: RunStep, i: number }>): Promise<Se
     }
     const req: SendRequest = op?.req ?? (s.type === 'send' ? { kind: 'payment', value: s.luna!, recipient: s.recipient!, data: 'Kickback' } : { kind: 'addStake', value: s.luna! })
     // A pruned op is at least a day old: search as deep as we can.
-    const hash = await searchWide(me(), req, op?.startedAt ?? 0, ledgerHashes())
+    const hash = await searchWide(me(), req, op?.startedAt ?? 0, ops.knownHashes(s.opId))
     if (hash === UNKNOWN) {
       ui.showToast('Can\'t check the network right now, so nothing was sent again. Try again in a minute.')
       return 'blocked'

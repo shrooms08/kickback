@@ -87,6 +87,8 @@ async function markTestKickback() {
 }
 // Reset also forgets what dry-run runs shared, so old dry shares never eat new fake kickbacks.
 function resetDry() {
+  // Mid-flight a reset would orphan the fake transactions an op is waiting for.
+  if (moneyBusy()) { ui.showToast('Wait until your plan or stake finishes.'); return }
   dry.reset()
   plan.clearDryLedger()
   clearFinished()

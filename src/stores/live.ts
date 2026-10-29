@@ -5,7 +5,7 @@ import { useAccount } from './account'
 import { useData } from './data'
 import { useNav } from './nav'
 import { usePlan } from './plan'
-import { useOps, onSettled } from './ops'
+import { heldLuna, useOps, onSettled } from './ops'
 import { useDry } from './dry'
 import { router } from '../router'
 import type { Pool } from '../services/mock'
@@ -567,7 +567,8 @@ export const useLive = defineStore('live', {
 
       // Ready to share: wallet kickbacks since the plan started, minus what's shared or in flight.
       // Dry-run shares only count against dry-run kickbacks (and the other way round).
-      const inFlight = ops.active.filter(o => o.flow === 'run' && o.dry === isDry).reduce((a, o) => a + o.req.value, 0)
+      // In flight, plus uncertain sends that could still land (until their validity window ends).
+      const inFlight = heldLuna(ops.ops, isDry)
       // Kickbacks counted once stay counted, even after they leave the 30-day history.
       if (!wallet.isPreview) plan.rememberKickbacks(kick)
       const ready = readyLuna(withRemembered(kick, plan.counted), plan.planStartedAt, ledgerFor(plan.ledger, isDry), inFlight)
