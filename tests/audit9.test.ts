@@ -5,7 +5,7 @@ import { memoryStorage } from './helpers/storage'
 // Audit 9: small money guards.
 const ME = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', TO = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
 const POOL = 'NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717'
-const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn(), searchWide: vi.fn() }))
+const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn(), searchWide: vi.fn(), validUntilOf: vi.fn(async () => null) }))
 const chainMock = vi.hoisted(() => ({ getStaker: vi.fn() }))
 const cached = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }))
 vi.mock('../src/services/tx', async orig => ({ ...(await orig<object>()), ...tx }))

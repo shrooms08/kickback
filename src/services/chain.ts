@@ -39,6 +39,9 @@ export interface Tx {
   from: string
   to: string
   value: number
+  fee?: number
+  /** Block the transaction was made at; it can be included until this plus the validity window. */
+  validityStartHeight?: number
   relatedAddresses?: string[]
   recipientData?: string
   executionResult?: boolean

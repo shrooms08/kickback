@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import Icon from './Icon.vue'
 import type { RunStep } from '../stores/flow'
+import { useOps } from '../stores/ops'
+import { EXPIRED_TEXT } from '../services/tx'
 
 // Numbered steps, each approved in Nimiq Pay: waiting, checking, confirming,
 // approved, cancelled, failed, skipped. Same look as Run my plan.
@@ -18,10 +20,11 @@ const ST: Record<RunStep['st'], [string, string]> = {
   skipped: ['Not sent', 'var(--kb-text-3)'],
   unknown: ['Not sure it went through. It is checked before anything is sent again.', 'var(--kb-text-2)'],
 }
+const ops = useOps()
 const rows = computed(() => props.steps.map((s, i) => ({
   ...s,
   n: i + 1,
-  status: s.st === 'confirming' && s.slow ? 'Still confirming. It will update here.' : ST[s.st][0],
+  status: s.st === 'confirming' && s.slow ? 'Still confirming. It will update here.' : s.st === 'failed' && ops.byId(s.opId)?.error === EXPIRED_TEXT ? EXPIRED_TEXT : ST[s.st][0],
   color: ST[s.st][1],
 })))
 </script>

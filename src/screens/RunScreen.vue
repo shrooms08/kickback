@@ -10,7 +10,8 @@ import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
-import { useOps } from '../stores/ops'
+import { signerBlockText, useOps } from '../stores/ops'
+import { EXPIRED_TEXT } from '../services/tx'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
 import { checkingLine, now } from '../lib/time'
@@ -74,6 +75,7 @@ const reason = computed(() => {
   if (!review.value || empty.value) return ''
   if (waitingMin.value) return `Your plan runs once ${coll.value.need} NIM is ready`
   if (wallet.isPreview) return 'Preview is read only'
+  if (live.value && ops.signerMismatch && !wallet.isDry) return signerBlockText(ops.signerMismatch)
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
   if (live.value) {
     if (plan.planStartedAt == null) return 'Save your plan first. Kickbacks after that are shared with it.'
@@ -104,7 +106,7 @@ const ops = useOps()
 const steps = computed(() => flow.steps.map((x, i) => ({
   ...x,
   n: i + 1,
-  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : ST[x.st][0],
+  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : x.st === 'failed' && ops.byId(x.opId)?.error === EXPIRED_TEXT ? EXPIRED_TEXT : ST[x.st][0],
   color: ST[x.st][1],
   canRetry: running.value && x.st === 'cancelled',
 })))

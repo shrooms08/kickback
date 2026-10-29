@@ -127,4 +127,4 @@ npm run build      # vue-tsc type check + production build
 
 ## License
 
-MIT, see `LICENSE`.
+MIT, see `LICENSE`. The bundled Archivo font is under the SIL Open Font License 1.1, see `src/design/fonts/OFL.txt`.

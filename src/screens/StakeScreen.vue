@@ -8,6 +8,7 @@ import { useAccount } from '../stores/account'
 import { MIN_STAKE_NIM, NIM_USD } from '../services/mock'
 import { useData } from '../stores/data'
 import { useWallet } from '../stores/wallet'
+import { signerBlockText, useOps } from '../stores/ops'
 import { int0, nim2 } from '../lib/format'
 import { shake } from '../lib/anim'
 import { back } from '../router'
@@ -43,8 +44,10 @@ const bad = computed(() => live.value
   ? n.value > 0 && liveCheck.value !== 'ok'
   : n.value > 0 && (n.value < MIN_STAKE_NIM || n.value > bal.value || bal.value < MIN_STAKE_NIM))
 
+const ops = useOps()
 const reason = computed(() => {
   if (wallet.isPreview) return 'Preview is read only'
+  if (ops.signerMismatch && !wallet.isDry) return signerBlockText(ops.signerMismatch)
   if (live.value) {
     if (account.offline) return 'You\'re offline. Reconnect to stake.'
     if (account.chainUnknown) return 'Can\'t check your stake right now. Try again in a minute.'
