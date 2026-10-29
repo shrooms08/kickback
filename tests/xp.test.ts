@@ -126,3 +126,23 @@ describe('invite XP: the invitee keeps a real stake for 7 days after the claim (
     expect(at(claimed + 8 * D, [...two, today])).toBe('never')
   })
 })
+
+describe('invite week starts on the first day with a stake after the claim (review info)', () => {
+  const D = 864e5, MIN = 1_000_000
+  const claimed = Date.parse('2026-10-10T23:00:00Z')
+  const day = (i: number, luna = MIN) => ({ day: utcDay(claimed + i * D), active_luna: luna })
+  it('the day after the claim was snapshotted (00:10) before the invitee staked: the week starts the next day', () => {
+    const snaps = [day(1, 0), ...[2, 3, 4, 5, 6, 7, 8].map(i => day(i)), day(9)]
+    expect(inviteStakeKept(claimed, claimed + 9 * D, snaps, MIN)).toBe('yes')
+    expect(inviteStakeKept(claimed, claimed + 7 * D, snaps.slice(0, 7), MIN)).toBe('wait')
+  })
+  it('a dip after the week started still means never', () => {
+    const snaps = [day(1, 0), ...[2, 3, 4].map(i => day(i)), day(5, 10), ...[6, 7, 8, 9].map(i => day(i))]
+    expect(inviteStakeKept(claimed, claimed + 9 * D, snaps, MIN)).toBe('never')
+  })
+  it('the stake must start within the 7 days after the claim', () => {
+    const late = [...[1, 2, 3, 4, 5, 6, 7].map(i => day(i, 0)), ...[8, 9, 10, 11, 12, 13, 14, 15].map(i => day(i))]
+    expect(inviteStakeKept(claimed, claimed + 15 * D, late, MIN)).toBe('never')
+    expect(inviteStakeKept(claimed, claimed + 5 * D, late.slice(0, 5), MIN)).toBe('wait')
+  })
+})
