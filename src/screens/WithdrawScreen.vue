@@ -7,6 +7,7 @@ import StepList from '../components/StepList.vue'
 import { useFlow } from '../stores/flow'
 import { useAccount } from '../stores/account'
 import { useWallet } from '../stores/wallet'
+import { signerBlockText, useOps } from '../stores/ops'
 import { nim2 } from '../lib/format'
 import { back } from '../router'
 import { clearFinished, runWithdraw } from '../money'
@@ -17,7 +18,8 @@ const a = useAccount()
 const wallet = useWallet()
 const total = computed(() => flow.wSteps.reduce((m, s) => Math.max(m, s.luna ?? 0), 0))
 const done = computed(() => flow.wPhase === 'done' && flow.wSteps.every(s => s.st === 'approved'))
-const reason = computed(() => wallet.isPreview ? 'Preview is read only' : '')
+const ops = useOps()
+const reason = computed(() => wallet.isPreview ? 'Preview is read only' : ops.signerMismatch && !wallet.isDry ? signerBlockText(ops.signerMismatch) : '')
 
 function close() {
   clearFinished()

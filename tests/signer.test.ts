@@ -73,3 +73,31 @@ describe('the signing account', () => {
     expect(s.ops.signerMismatch).toBeFalsy()
   })
 })
+
+describe('reset signer check (final fix 2)', () => {
+  async function blocked() {
+    const s = await fresh()
+    tx.waitIncluded.mockImplementation(async (_h: string, o: { onTx?: (t: unknown) => void }) => { o.onTx?.({ hash: 'h1', from: OTHER, to: TO, value: 1 }); return 'ok' })
+    await s.ops.execute('run', { kind: 'payment', value: 1, recipient: TO }, ME)
+    expect(s.ops.signerMismatch).toBeTruthy()
+    return s
+  }
+  it('clears the block when Nimiq Pay lists this account again, and the next send is verified again', async () => {
+    const s = await blocked()
+    expect(s.ops.resetSigner([ME.toLowerCase(), OTHER])).toEqual({ cleared: true })
+    expect(s.ops.signerMismatch).toBe('')
+    expect(s.ops.signerOk).toBe(false)
+    expect(localStorage.getItem('kb:ops:' + ME.replace(/\s/g, '') + ':signer')).toBeNull()
+  })
+  it('keeps the block when Nimiq Pay is still on another account, and says which', async () => {
+    const s = await blocked()
+    expect(s.ops.resetSigner([OTHER])).toEqual({ cleared: false, account: OTHER })
+    expect(s.ops.signerMismatch).toBeTruthy()
+  })
+  it('explains the block in plain words', async () => {
+    const { signerBlockText } = await import('../src/stores/ops')
+    const t = signerBlockText(OTHER)
+    expect(t).toMatch(/NQ16 … P717/)
+    expect(t).toMatch(/Reset signer check/)
+  })
+})

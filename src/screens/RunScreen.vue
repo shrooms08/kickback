@@ -10,7 +10,7 @@ import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
-import { useOps } from '../stores/ops'
+import { signerBlockText, useOps } from '../stores/ops'
 import { EXPIRED_TEXT } from '../services/tx'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
@@ -75,6 +75,7 @@ const reason = computed(() => {
   if (!review.value || empty.value) return ''
   if (waitingMin.value) return `Your plan runs once ${coll.value.need} NIM is ready`
   if (wallet.isPreview) return 'Preview is read only'
+  if (live.value && ops.signerMismatch && !wallet.isDry) return signerBlockText(ops.signerMismatch)
   if (a.offline) return 'You\'re offline. Reconnect to run your plan.'
   if (live.value) {
     if (plan.planStartedAt == null) return 'Save your plan first. Kickbacks after that are shared with it.'

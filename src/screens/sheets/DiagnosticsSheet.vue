@@ -15,7 +15,8 @@ import { ago } from '../../lib/time'
 import { shake } from '../../lib/anim'
 import { openLive } from '../../flows'
 import { useDry } from '../../stores/dry'
-import { useOps } from '../../stores/ops'
+import { signerBlockText, useOps } from '../../stores/ops'
+import { connectAccount } from '../../services/nimiq'
 import { navlog } from '../../lib/navlog'
 import { useNav } from '../../stores/nav'
 import { usePlan } from '../../stores/plan'
@@ -84,6 +85,21 @@ async function markTestKickback() {
   plan.markTestKickback(luna)
   live.derive()
   ui.showToast(plan.planStartedAt == null ? 'Marked. It will be ready to share once you save a plan' : `Testnet: +${nim2(luna / 1e5).replace(/\.00$/, '')} NIM test kickback`)
+}
+// The signer block (Nimiq Pay signed from another account): re-read Nimiq Pay's accounts and
+// clear it only when its signing account is this one again.
+const signerMsg = ref('')
+const signerBusy = ref(false)
+async function resetSignerCheck() {
+  signerMsg.value = ''
+  signerBusy.value = true
+  try {
+    const accounts = wallet.isMock ? [wallet.address] : (await connectAccount()).accounts
+    const r = ops.resetSigner(accounts)
+    signerMsg.value = r.cleared ? 'Signer check reset. The next transaction is checked again.' : `Nimiq Pay is still on ${formatAddress(r.account)}. Switch it to ${formatAddress(wallet.address)} first.`
+  }
+  catch (e) { signerMsg.value = `Couldn't read your accounts from Nimiq Pay: ${(e as Error).message}` }
+  finally { signerBusy.value = false }
 }
 // Reset also forgets what dry-run runs shared, so old dry shares never eat new fake kickbacks.
 function resetDry() {
@@ -233,6 +249,12 @@ async function again() {
   <div class="title-row" data-sheet-drag>
     <h2 class="sheet-h">Diagnostics</h2>
     <button class="kb-icon-btn" aria-label="Close" @click="ui.closeSheet()"><Icon name="close" :size="18" /></button>
+  </div>
+  <div class="dry" data-kb="signer-check">
+    <div class="kb-eyebrow">Signer check</div>
+    <p class="dnote">{{ ops.signerMismatch ? signerBlockText(ops.signerMismatch) : ops.signerOk ? 'Nimiq Pay signs from this account. Sending is allowed.' : 'Checked on your next transaction: it must come from this account.' }}</p>
+    <button class="kb-btn pbtn" :disabled="signerBusy" @click="resetSignerCheck">Reset signer check</button>
+    <div v-if="signerMsg" :class="ops.signerMismatch ? 'perr' : 'dnote'">{{ signerMsg }}</div>
   </div>
   <div class="dry">
     <div class="drow">

@@ -7,7 +7,8 @@ import { useDry } from './dry'
 import { usePlan } from './plan'
 import { useUi } from './ui'
 import { isValidAddress } from '../lib/address'
-import { STAKING_CONTRACT, sameAddr } from '../services/chain'
+import { STAKING_CONTRACT, sameAddr, spaced } from '../services/chain'
+import { addressShort } from '../lib/format'
 import type { Tx } from '../services/chain'
 import { isUuid, uuid } from '../lib/uuid'
 
@@ -72,6 +73,11 @@ export function requestProblem(req: SendRequest, address: string): string {
 }
 
 const MISMATCH = 'Nimiq Pay sent from a different account than the one Kickback shows, so Kickback stopped sending. Open Kickback again from the account you use in Nimiq Pay.'
+
+/** Why sending is paused, for the screens that send (Run my plan, Stake, Withdraw). */
+export function signerBlockText(signer: string): string {
+  return `Sending is paused: Nimiq Pay sent your last transaction from ${addressShort(spaced(signer))}, not this account. Switch Nimiq Pay back to this account, then tap Reset signer check in Diagnostics.`
+}
 
 /** Hashes already shared: never mistaken for a new send of the same amount. */
 export function ledgerHashes(): Set<string> {
@@ -285,6 +291,20 @@ export const useOps = defineStore('ops', {
         }
         finally { if (this.byId(op.id)?.phase !== 'confirming') running.delete(op.id) }
       }
+    },
+
+    /**
+     * Diagnostics "Reset signer check", with the account list Nimiq Pay gives now: clear the block
+     * only if its signing account (the first) is this one again. The next send is verified again.
+     */
+    resetSigner(accounts: readonly string[]): { cleared: true } | { cleared: false, account: string } {
+      const signer = accounts[0] ?? ''
+      if (!sameAddr(signer, this.address)) return { cleared: false, account: signer }
+      this.signerMismatch = ''
+      this.signerOk = false
+      prefSet(this.key(this.address) + ':signer', null)
+      prefSet(this.key(this.address) + ':signerok', null)
+      return { cleared: true }
     },
 
     /** After a restart: continue checking anything that was in flight. Never re-sends. */
