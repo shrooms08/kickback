@@ -166,16 +166,64 @@ export async function searchWide(me: string, req: SendRequest, since: number, sk
   return historyDirect ? null : UNKNOWN
 }
 
-export type Inclusion = 'ok' | 'failed'
+/** Shown when a sent transaction can no longer be included. */
+export const EXPIRED_TEXT = 'Didn\'t go through. Nothing moved.'
+
+let windowBlocks: number | null = null
+/** The network's transaction validity window in blocks (getPolicyConstants), or null when it can't be read. */
+export async function validityWindow(): Promise<number | null> {
+  if (windowBlocks) return windowBlocks
+  try {
+    const w = (await rpc<{ transactionValidityWindow?: number }>('getPolicyConstants', [], { ttl: 24 * 3600e3 })).value?.transactionValidityWindow
+    if (typeof w === 'number' && w > 0) windowBlocks = w
+  }
+  catch { /* unknown: nothing expires */ }
+  return windowBlocks
+}
+
+async function headBlock(): Promise<number | null> {
+  try {
+    const v = (await rpc<number>('getBlockNumber', [], { noStore: true })).value
+    return typeof v === 'number' ? v : null
+  }
+  catch { return null }
+}
+
+/**
+ * The last block a sent transaction can be included in: its validityStartHeight plus the
+ * validity window. Without the start height, the current height (never earlier than the real
+ * start, so it never expires too soon). Null when the window or height can't be read.
+ */
+export async function validUntilOf(hash: string): Promise<number | null> {
+  const w = await validityWindow()
+  if (!w) return null
+  let start: number | null = null
+  try {
+    const t = (await rpc<Tx | null>('getTransactionByHash', [hash], { noStore: true })).value
+    if (typeof t?.validityStartHeight === 'number') start = t.validityStartHeight
+  }
+  catch { /* not found yet: use the height */ }
+  start ??= await headBlock()
+  return start == null ? null : start + w
+}
+
+/** True once the chain is past `validUntil` (the transaction can no longer be included). */
+export async function pastValidity(validUntil: number): Promise<boolean> {
+  const head = await headBlock()
+  return head != null && head > validUntil
+}
+
+export type Inclusion = 'ok' | 'failed' | 'expired'
 
 /**
  * Poll getTransactionByHash every 4 s until the transaction is in a block.
  * After 2 minutes `onSlow` fires once and polling carries on in the
  * background (stop it with `signal`). "Transaction not found" means not yet.
  */
-export async function waitIncluded(hash: string, opts: { onSlow?: () => void, signal?: { stopped: boolean }, onTx?: (tx: Tx) => void } = {}): Promise<Inclusion> {
+export async function waitIncluded(hash: string, opts: { onSlow?: () => void, signal?: { stopped: boolean }, onTx?: (tx: Tx) => void, expired?: () => Promise<boolean> } = {}): Promise<Inclusion> {
   const dry = useDry()
   const start = Date.now()
+  let lastExpiryCheck = start
   let slowFired = false
   for (;;) {
     if (opts.signal?.stopped) throw new Error('stopped')
@@ -198,6 +246,18 @@ export async function waitIncluded(hash: string, opts: { onSlow?: () => void, si
       }
     }
     if (!slowFired && Date.now() - start > SLOW_AFTER_MS) { slowFired = true; opts.onSlow?.() }
+    // Once a minute: past its validity window it can't be included any more. One last look first.
+    if (opts.expired && Date.now() - lastExpiryCheck >= 60_000) {
+      lastExpiryCheck = Date.now()
+      if (await opts.expired()) {
+        try {
+          const r = await rpc<Tx | null>('getTransactionByHash', [hash], { noStore: true })
+          if (r.value && r.value.blockNumber > 0 && typeof r.value.executionResult === 'boolean') { opts.onTx?.(r.value); return r.value.executionResult ? 'ok' : 'failed' }
+        }
+        catch { /* not found: expired */ }
+        return 'expired'
+      }
+    }
     await sleep(dry.on ? 1000 : CONFIRM_POLL_MS)
   }
 }

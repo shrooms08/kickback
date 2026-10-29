@@ -5,7 +5,7 @@ import { memoryStorage } from './helpers/storage'
 // Audit 7: every send re-checks the recipient (checksum, not your own address), and once a sent
 // transaction shows Nimiq Pay signed from another account, Kickback stops sending.
 const ME = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', TO = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8', OTHER = 'NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717'
-const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn() }))
+const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn(), validUntilOf: vi.fn(async () => null) }))
 vi.mock('../src/services/tx', async orig => ({ ...(await orig<object>()), ...tx }))
 
 async function fresh() {

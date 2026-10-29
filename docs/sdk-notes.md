@@ -116,6 +116,7 @@ Same as Nimcade and the Nimiq docs: `server: { host: true, port: 5173 }` in `vit
 - `-32603 "Transaction not found: …"` means not yet.
 - `blockNumber > 0` means included, and `executionResult: false` means it failed on chain.
 - After 2 minutes the app shows "Still confirming" and keeps polling in the background.
+- A transaction can only be included until `validityStartHeight + transactionValidityWindow` (7,200 blocks on both networks, read from `getPolicyConstants`; the height at send time when the start height can't be read). Once the chain is past that and it is still not in a block, it ends as "Didn't go through. Nothing moved." and its amount is ready to share again. If the policy or height can't be read it keeps waiting.
 
 **Never twice:**
 - Each send is an op persisted per address in localStorage. Reopening the app resumes checking (a chain search or inclusion polling) and never re-sends.

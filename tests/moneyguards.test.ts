@@ -6,7 +6,7 @@ import { memoryStorage } from './helpers/storage'
 // a hold that fires twice starts one action, and nothing switches mode or wallet mid-flight.
 const ME = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', TO = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
 const POOL = 'NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717'
-const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn() }))
+const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn(), validUntilOf: vi.fn(async () => null) }))
 const staker = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }))
 vi.mock('../src/services/tx', async orig => ({ ...(await orig<object>()), ...tx }))
 vi.mock('../src/router', () => ({ go: vi.fn(), back: vi.fn() }))

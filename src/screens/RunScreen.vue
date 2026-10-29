@@ -11,6 +11,7 @@ import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
 import { useOps } from '../stores/ops'
+import { EXPIRED_TEXT } from '../services/tx'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
 import { checkingLine, now } from '../lib/time'
@@ -104,7 +105,7 @@ const ops = useOps()
 const steps = computed(() => flow.steps.map((x, i) => ({
   ...x,
   n: i + 1,
-  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : ST[x.st][0],
+  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : x.st === 'failed' && ops.byId(x.opId)?.error === EXPIRED_TEXT ? EXPIRED_TEXT : ST[x.st][0],
   color: ST[x.st][1],
   canRetry: running.value && x.st === 'cancelled',
 })))

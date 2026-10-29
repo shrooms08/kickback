@@ -5,7 +5,7 @@ import { memoryStorage } from './helpers/storage'
 // Audit 1: a run step that was approved before a restart must be recorded as shared exactly
 // once, so its amount is never ready to share (and sendable) a second time.
 const ME = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T', TO = 'NQ03 J45B 27LT QHD7 2PRM 73QP SB15 LM6H VCR8'
-const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn() }))
+const tx = vi.hoisted(() => ({ send: vi.fn(), findOnChain: vi.fn(), waitIncluded: vi.fn(), validUntilOf: vi.fn(async () => null) }))
 vi.mock('../src/services/tx', async (orig) => ({ ...(await orig<object>()), ...tx }))
 
 const flush = () => new Promise(r => setTimeout(r, 0))

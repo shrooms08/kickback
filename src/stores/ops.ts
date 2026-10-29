@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { logMoney } from '../lib/moneylog'
 import { prefGet, prefSet } from '../lib/cache'
-import { DRY_CHECK_WINDOW_MS, UNCERTAIN_HOLD_MS, UNKNOWN, VALIDITY_MS, findOnChain, searchWide, send, waitIncluded } from '../services/tx'
+import { DRY_CHECK_WINDOW_MS, EXPIRED_TEXT, UNCERTAIN_HOLD_MS, UNKNOWN, VALIDITY_MS, findOnChain, pastValidity, searchWide, send, validUntilOf, waitIncluded } from '../services/tx'
 import type { SendRequest } from '../services/sendTypes'
 import { useDry } from './dry'
 import { usePlan } from './plan'
@@ -44,6 +44,8 @@ export interface Op {
   uncertainAt?: number
   /** Declined with a cancel name the SDK doesn't define: a retry checks the chain first. */
   softCancel?: boolean
+  /** The last block the sent transaction can be included in (validityStartHeight + window). */
+  validUntil?: number
   /**
    * Flow details. Switch: old pool, when it takes effect. Run: step index, `luna`, `type`
    * (send / restake) and `runId`, so the share is recorded when it settles, even after a restart.
@@ -201,7 +203,26 @@ export const useOps = defineStore('ops', {
     async confirm(id: string) {
       const op = this.byId(id)
       if (!op?.hash) return
-      const r = await waitIncluded(op.hash, { onSlow: () => this.patch(id, { slow: true }), onTx: tx => this.checkSigner(op, tx) })
+      const until = async (): Promise<number | null> => {
+        const known = this.byId(id)?.validUntil
+        if (known != null) return known
+        const v = await validUntilOf(op.hash!)
+        if (v != null) this.patch(id, { validUntil: v })
+        return v
+      }
+      if (!op.dry) void until() // learnt in the background; polling starts at once
+      const r = await waitIncluded(op.hash, {
+        onSlow: () => this.patch(id, { slow: true }),
+        onTx: tx => this.checkSigner(op, tx),
+        // Past its validity window and still not in a block: it can never be included.
+        expired: op.dry ? undefined : async () => { const v = await until(); return v != null && pastValidity(v) },
+      })
+      if (r === 'expired') {
+        const cur = this.byId(id)!
+        this.patch(id, { phase: 'not-sent', error: EXPIRED_TEXT, slow: false, meta: { ...cur.meta, released: 1 } })
+        useUi().showToast(EXPIRED_TEXT)
+        return
+      }
       this.patch(id, { phase: r === 'ok' ? 'confirmed' : 'failed' })
     },
 
