@@ -236,7 +236,7 @@ export const useLive = defineStore('live', {
       timer = window.setInterval(() => {
         if (document.visibilityState !== 'visible') return
         const every = useAccount().stale || useAccount().chainUnknown ? DEGRADED_EVERY : REFRESH_EVERY
-        if (Date.now() - lastTry >= every) { lastTry = Date.now(); this.refresh() }
+        if (Date.now() - lastTry >= every) { lastTry = Date.now(); this.refresh(); void useOps().sweepUncertain() }
       }, DEGRADED_EVERY)
       const cached = cacheGet<Snapshot>('snap:' + norm(address))
       if (cached && cached.v.rewards) {

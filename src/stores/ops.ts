@@ -76,14 +76,17 @@ export function ledgerHashes(): Set<string> {
   return new Set(usePlan().ledger.map(e => e.hash).filter((h): h is string => !!h))
 }
 
-/** An uncertain "not sent" run op whose transaction could still be included (and isn't replaced or released). */
-export function isHeld(o: Op, now = Date.now()): boolean {
-  return o.flow === 'run' && o.phase === 'not-sent' && o.uncertainAt != null && now - o.uncertainAt < VALIDITY_MS && !o.meta?.superseded && !o.meta?.released
+/**
+ * An uncertain "not sent" run op: held until a final search after its validity window has
+ * released it (or a retry replaced it), so a late transaction is never shared twice.
+ */
+export function isHeld(o: Op): boolean {
+  return o.flow === 'run' && o.phase === 'not-sent' && o.uncertainAt != null && !o.meta?.superseded && !o.meta?.released
 }
 
 /** Luna kept out of Ready to share: run ops in flight, and uncertain ones that may still land. */
-export function heldLuna(ops: readonly Op[], dry: boolean, now = Date.now()): number {
-  return ops.filter(o => o.dry === dry && o.flow === 'run' && (!TERMINAL.includes(o.phase) || isHeld(o, now))).reduce((a, o) => a + o.req.value, 0)
+export function heldLuna(ops: readonly Op[], dry: boolean): number {
+  return ops.filter(o => o.dry === dry && o.flow === 'run' && (!TERMINAL.includes(o.phase) || isHeld(o))).reduce((a, o) => a + o.req.value, 0)
 }
 
 function recordRunShare(op: Op) {
@@ -126,8 +129,8 @@ export const useOps = defineStore('ops', {
       if (!this.address) return
       // Every op still in flight or held is kept; finished ones for a day, at most 40.
       const now = Date.now(), dayAgo = now - 24 * 3600e3
-      const done = new Set(this.ops.filter(o => TERMINAL.includes(o.phase) && !isHeld(o, now) && o.startedAt > dayAgo).slice(-40))
-      const keep = this.ops.filter(o => (!TERMINAL.includes(o.phase) || isHeld(o, now)) || done.has(o))
+      const done = new Set(this.ops.filter(o => TERMINAL.includes(o.phase) && !isHeld(o) && o.startedAt > dayAgo).slice(-40))
+      const keep = this.ops.filter(o => (!TERMINAL.includes(o.phase) || isHeld(o)) || done.has(o))
       prefSet(this.key(this.address), JSON.stringify(keep))
     },
     patch(id: string, p: Partial<Op>) {

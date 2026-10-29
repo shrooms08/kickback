@@ -92,6 +92,9 @@ describe('M3: an uncertain "not sent" stays held for the validity window', () =>
     s.ops.ops.push({ ...base, id: 'b', phase: 'not-sent', startedAt: Date.now() - 3 * H, uncertainAt: Date.now() - 3 * H })
     s.ops.ops.push({ ...base, id: 'c', phase: 'not-sent', startedAt: Date.now() - 1000 }) // host refused: sure
     s.ops.ops.push({ ...base, id: 'd', phase: 'not-sent', startedAt: Date.now() - H, uncertainAt: Date.now() - H, meta: { ...base.meta, superseded: 'x' } })
+    // a (1 h) and b (3 h, past the window but not yet searched) are held; c, d are not.
+    expect(s.opsMod.heldLuna(s.ops.ops, false)).toBe(500_000)
+    await s.ops.sweepUncertain() // b: nothing on chain, released
     expect(s.opsMod.heldLuna(s.ops.ops, false)).toBe(250_000)
   })
   it('at the end of the window a final search adopts a late transaction', async () => {
