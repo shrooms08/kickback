@@ -4,6 +4,8 @@
 // restake 30 / keep 60. The plan must reach the database exactly, and come back exactly after
 // Sign out + Sign in, and after clearing localStorage.
 // Usage: node e2e/plan-roundtrip.mjs [baseUrl]   (default http://localhost:5173/)
+//        E2E_LOCAL=1: the app under test talks to the local stack; check the local functions and
+//        database (docker psql) instead of production.
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -15,7 +17,8 @@ import { createNimiqVerifier, signedMessageData } from '../supabase/functions/_s
 import { setup, sleep } from './lib.mjs'
 
 const BASE = process.argv[2] || 'http://localhost:5173/'
-const FN = 'https://dhjcilstkumeglweddev.supabase.co/functions/v1'
+const LOCAL = process.env.E2E_LOCAL === '1'
+const FN = LOCAL ? 'http://127.0.0.1:54321/functions/v1' : 'https://dhjcilstkumeglweddev.supabase.co/functions/v1'
 const hex = b => Buffer.from(b).toString('hex')
 const priv = randomBytes(32), pub = ed25519.getPublicKey(priv)
 const verifier = createNimiqVerifier({ sha256: d => sha256(d), blake2b256: d => blake2b(d, { dkLen: 32 }), ed25519Verify: (s, m, p) => ed25519.verify(s, m, p) })
@@ -44,6 +47,10 @@ async function serverPlan() {
 }
 /** The row as stored, read with the database password when it is on this machine. */
 function dbRow() {
+  if (LOCAL) {
+    const out = execFileSync('docker', ['exec', '-i', 'supabase_db_kickback', 'psql', '-U', 'postgres', '-d', 'postgres', '-q', '-t', '-A'], { input: `select json_build_object('slices', slices, 'plan_started_at', plan_started_at) from public.plans where network = 'testnet' and address = '${ADDRESS}';`, encoding: 'utf8' }).trim()
+    return out ? JSON.parse(out) : 'no row'
+  }
   const pass = `${homedir()}/.kickback-supabase-db.pass`
   if (!existsSync(pass)) return null
   const out = execFileSync('supabase', ['db', 'query', '--linked', `select slices, plan_started_at from public.plans where network = 'testnet' and address = '${ADDRESS}'`], { env: { ...process.env, SUPABASE_DB_PASSWORD: readFileSync(pass, 'utf8').trim() }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })

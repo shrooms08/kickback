@@ -3,9 +3,11 @@ import { DEFAULT_CONTACTS, DEFAULT_PLAN, NO_CONTACT_PLAN } from '../services/moc
 import type { Contact } from '../services/mock'
 import { sameSplit } from '../lib/plan'
 import type { Split } from '../lib/plan'
-import type { LedgerEntry } from '../lib/money'
+import type { Counted, LedgerEntry } from '../lib/money'
+import { EMPTY_COUNTED, rememberKickbacks } from '../lib/money'
 import { prefGet, prefSet } from '../lib/cache'
 import { DEFAULT_MIN_READY, MIN_READY_CHOICES } from '../lib/minReady'
+import { uuid } from '../lib/uuid'
 
 /** One slice of a plan, in order. Send slices carry their contact. */
 export type Slice =
@@ -23,6 +25,8 @@ interface Persisted {
   minReadyLuna?: number
   /** Testnet only: test kickbacks marked in Diagnostics. */
   marked?: MarkedKickback[]
+  /** Real wallet kickbacks counted since the plan started (they stay ready after leaving the 30-day history). */
+  counted?: Counted
 }
 
 /** A testnet test kickback: real testnet NIM already in the wallet, marked as ready to share. */
@@ -32,14 +36,6 @@ interface Backup { contacts: Contact[], recipient: string | null, savedRecipient
 
 let contactsBackup: Backup | null = null
 
-function newId(): string {
-  try { return crypto.randomUUID() }
-  catch {
-    const h = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0'))
-    h[6] = '4' + h[6][1]; h[8] = ((parseInt(h[8], 16) & 0x3f) | 0x80).toString(16)
-    return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10).join('')}`
-  }
-}
 let lastWritten = ''
 let subscribed = false
 
@@ -58,6 +54,8 @@ export const usePlan = defineStore('plan', {
     ledger: [] as LedgerEntry[],
     /** Testnet only: test kickbacks marked in Diagnostics (plans are stored per network). */
     marked: [] as MarkedKickback[],
+    /** Kickbacks counted since the plan started, remembered by hash. */
+    counted: EMPTY_COUNTED as Counted,
     /** Run when ready reaches: 0.10 / 1 / 5 NIM (Luna). */
     minReadyLuna: DEFAULT_MIN_READY as number,
     contacts: DEFAULT_CONTACTS.slice() as Contact[],
@@ -120,7 +118,7 @@ export const usePlan = defineStore('plan', {
       catch { p = null }
       const d: Persisted = p ?? { contacts: [], saved: NO_CONTACT_PLAN.slice() as Split, savedRecipient: null, planStartedAt: null, ledger: [] }
       lastWritten = ''
-      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], minReadyLuna: d.minReadyLuna ?? DEFAULT_MIN_READY, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
+      this.$patch({ contacts: d.contacts, saved: d.saved, savedRecipient: d.savedRecipient, planStartedAt: d.planStartedAt, ledger: d.ledger, marked: d.marked ?? [], counted: d.counted ?? EMPTY_COUNTED, minReadyLuna: d.minReadyLuna ?? DEFAULT_MIN_READY, pct: d.saved.slice() as Split, recipient: d.savedRecipient, dragRanks: null })
       // Older plans could hold a send share with no recipient while Home and the Plan tab
       // showed the first contact: store that contact, so what is shown is what runs and syncs.
       if (this.contacts.length && !this.contacts.some(c => c.id === this.savedRecipient)) this.savedRecipient = this.resolveRecipient(this.savedRecipient)
@@ -129,11 +127,11 @@ export const usePlan = defineStore('plan', {
     },
     persist() {
       if (!this.owner) return
-      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}) }
+      const d: Persisted = { contacts: this.contacts, saved: this.saved, savedRecipient: this.savedRecipient, planStartedAt: this.planStartedAt, ledger: this.ledger, minReadyLuna: this.minReadyLuna, ...(this.marked.length ? { marked: this.marked } : {}), ...(this.counted.items.length || this.counted.foldedLuna ? { counted: this.counted } : {}) }
       const json = JSON.stringify(d)
       if (json === lastWritten) return
-      lastWritten = json
-      prefSet('plan:' + this.owner.replace(/\s/g, ''), json)
+      // Remembered only once stored, so a failed write (storage full) is tried again next time.
+      if (prefSet('plan:' + this.owner.replace(/\s/g, ''), json)) lastWritten = json
     },
     /** Persist automatically on any change (drag moves only touch the editor copy, so they don't write). */
     autoPersist() {
@@ -141,10 +139,14 @@ export const usePlan = defineStore('plan', {
       subscribed = true
       this.$subscribe(() => this.persist())
     },
-    /** A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones. */
-    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep', runId?: string): LedgerEntry | null {
+    /**
+     * A step succeeded: its amount is no longer ready to share. Dry-run shares are kept apart from real ones.
+     * `id` (a run step's op id) makes it idempotent: the same id or transaction hash is never recorded twice.
+     */
+    recordShared(luna: number, hash?: string, dry = false, sliceType: 'send' | 'restake' | 'keep' = 'keep', runId?: string, id?: string): LedgerEntry | null {
       if (luna <= 0) return null
-      const entry: LedgerEntry = { id: newId(), luna, at: Date.now(), hash, sliceType, ...(runId ? { runId } : {}), ...(dry ? { dry: true } : {}) }
+      if (this.ledger.some(e => (id && e.id === id) || (hash && e.hash === hash))) return null
+      const entry: LedgerEntry = { id: id ?? uuid(), luna, at: Date.now(), hash, sliceType, ...(runId ? { runId } : {}), ...(dry ? { dry: true } : {}) }
       this.ledger.push(entry)
       this.persist()
       return entry
@@ -170,6 +172,11 @@ export const usePlan = defineStore('plan', {
       if (d.planStartedAt !== undefined) this.planStartedAt = d.planStartedAt
       if (d.realLedger) this.ledger = [...this.ledger.filter(e => e.dry), ...d.realLedger].sort((a, b) => a.at - b.at)
       this.persist()
+    },
+    /** Remember kickbacks seen now (history, full scan, or the server's verified list). Writes only on change. */
+    rememberKickbacks(seen: ReadonlyArray<{ hash: string, at: number, luna: number, restaked?: boolean, dry?: boolean, manual?: boolean }>) {
+      const next = rememberKickbacks(this.counted, seen, this.planStartedAt)
+      if (next !== this.counted) { this.counted = next; this.persist() }
     },
     setMinReady(luna: number) {
       if (!(MIN_READY_CHOICES as readonly number[]).includes(luna)) return

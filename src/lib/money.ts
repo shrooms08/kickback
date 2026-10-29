@@ -107,3 +107,42 @@ export function readyLuna(kickbacks: readonly KickbackLike[], planStartedAt: num
 export function ledgerFor(ledger: readonly LedgerEntry[], dry: boolean): LedgerEntry[] {
   return ledger.filter(e => !!e.dry === dry)
 }
+
+// ---------- remembered kickbacks ----------
+
+/**
+ * Real wallet kickbacks counted since the plan started, kept so one stays ready to share after it
+ * leaves the 30-day history (or the full scan is missing). Ones older than 60 days are folded
+ * into a total; `foldedUntil` is the newest folded one.
+ */
+export interface Counted { items: Array<{ h: string, at: number, luna: number }>, foldedLuna: number, foldedUntil: number }
+export const EMPTY_COUNTED: Counted = { items: [], foldedLuna: 0, foldedUntil: 0 }
+const FOLD_AFTER_MS = 60 * 24 * 3600e3
+
+type SeenKickback = KickbackLike & { hash: string }
+
+/** Add the real wallet kickbacks in `seen` (by hash) and fold old ones. Returns the same object when nothing changed. */
+export function rememberKickbacks(c: Counted, seen: readonly SeenKickback[], planStartedAt: number | null, now = Date.now()): Counted {
+  if (planStartedAt == null) return c
+  const known = new Set(c.items.map(i => i.h))
+  const add = seen.filter(k => !k.restaked && !k.dry && !k.manual && k.at >= planStartedAt && k.at > c.foldedUntil && k.luna > 0 && !known.has(k.hash))
+  const items = [...c.items, ...add.map(k => ({ h: k.hash, at: k.at, luna: k.luna }))]
+  const old = items.filter(i => i.at < now - FOLD_AFTER_MS)
+  if (!add.length && !old.length) return c
+  return {
+    items: items.filter(i => i.at >= now - FOLD_AFTER_MS).sort((a, b) => a.at - b.at),
+    foldedLuna: c.foldedLuna + old.reduce((a, i) => a + i.luna, 0),
+    foldedUntil: Math.max(c.foldedUntil, ...old.map(i => i.at)),
+  }
+}
+
+/** The kickbacks readyLuna should count: what is in view now plus remembered ones that dropped out. */
+export function withRemembered(list: readonly SeenKickback[], c: Counted): KickbackLike[] {
+  const real = (k: KickbackLike) => !k.dry && !k.manual
+  // Folded kickbacks count once, as their total, even when the full history still lists them.
+  const out: KickbackLike[] = list.filter(k => !(real(k) && k.at <= c.foldedUntil))
+  const inView = new Set(list.map(k => k.hash))
+  for (const i of c.items) if (!inView.has(i.h)) out.push({ at: i.at, luna: i.luna })
+  if (c.foldedLuna > 0) out.push({ at: c.foldedUntil, luna: c.foldedLuna })
+  return out
+}

@@ -4,7 +4,8 @@ import type { ScreenName } from './nav'
 
 export type ApproveKind = 'stake' | 'switch' | 'unstake' | 'keep'
 export type ErrorFrom = 'stake' | 'switch' | 'unstake' | 'network' | 'notSent' | 'chainFailed'
-export type StepState = 'pending' | 'waiting' | 'checking' | 'confirming' | 'approved' | 'cancelled' | 'failed' | 'skipped'
+/** `unknown`: its op is gone (pruned), so it may have gone out; Retry checks the chain before sending. */
+export type StepState = 'pending' | 'waiting' | 'checking' | 'confirming' | 'approved' | 'cancelled' | 'failed' | 'skipped' | 'unknown'
 export type StepType = 'send' | 'restake' | 'keep' | 'retire' | 'remove'
 
 export interface RunStep {
@@ -53,6 +54,8 @@ export const useFlow = defineStore('flow', {
     runCapped: '' as string,
     runNote: '' as string,
     runAmountLuna: 0,
+    /** The run (and its Retry) is a dry run; never retried or resumed in the other mode. */
+    runDry: undefined as boolean | undefined,
     /** Withdraw (retire then remove) steps. */
     wSteps: [] as RunStep[],
     wPhase: 'review' as 'review' | 'running' | 'done',

@@ -16,6 +16,7 @@ const ST: Record<RunStep['st'], [string, string]> = {
   cancelled: ['You cancelled', 'var(--kb-text-2)'],
   failed: ['Didn\'t go through. Nothing was sent.', 'var(--kb-text-2)'],
   skipped: ['Not sent', 'var(--kb-text-3)'],
+  unknown: ['Not sure it went through. It is checked before anything is sent again.', 'var(--kb-text-2)'],
 }
 const rows = computed(() => props.steps.map((s, i) => ({
   ...s,

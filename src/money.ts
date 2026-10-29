@@ -7,6 +7,7 @@ import { minLabel } from './lib/minReady'
 // are checked on chain before we say anything; after a send we show
 // "confirming" and poll until it is in a block.
 import { watch } from 'vue'
+import { moneyLock } from './lib/moneyLock'
 import { back, go } from './router'
 import { useNav } from './stores/nav'
 import type { ScreenName } from './stores/nav'
@@ -17,17 +18,19 @@ import { useWallet } from './stores/wallet'
 import { useFlow } from './stores/flow'
 import type { RunStep, StepState } from './stores/flow'
 import { useData } from './stores/data'
-import { useOps, TERMINAL } from './stores/ops'
+import { isHeld, useOps, TERMINAL } from './stores/ops'
 import type { Op, OpFlow } from './stores/ops'
 import { currentStaker, useLive } from './stores/live'
 import { useDry } from './stores/dry'
-import { electionAfter, epochClock, releaseIfStoppedNow, sameAddr } from './services/chain'
+import { electionAfter, epochClock, getStaker, releaseIfStoppedNow, sameAddr } from './services/chain'
+import type { Staker } from './services/chain'
 import type { SendRequest } from './services/sendTypes'
+import { UNCERTAIN_HOLD_MS, UNKNOWN, searchWide } from './services/tx'
 import { checkStake, maxStake, parseNimInput, runAmount, splitLuna, spendable } from './lib/money'
 import { nim2 } from './lib/format'
 import { span } from './lib/time'
 import { fxStep } from './lib/fx'
-import { prefGet, prefSet } from './lib/cache'
+import { prefGet, prefSet, storageOk } from './lib/cache'
 import { isValidAddress } from './lib/address'
 import { isTestnet } from './lib/net'
 
@@ -77,20 +80,64 @@ function fail(kind: 'notSent' | 'chainFailed', backTo: ScreenName) {
   go('error')
 }
 
+// ---------- one money action at a time ----------
+
+/**
+ * Set synchronously before the first await of a money action, so a second hold (HoldButton
+ * re-arms after 520 ms, while the balance read can take 15 s) can't start a second one. Released
+ * once the action's own guard exists (its op is active, or the run is marked running).
+ */
+export const moneyLocked = () => moneyLock.value != null
+
+function acquire(name: string): (() => void) | null {
+  if (moneyLock.value) { useUi().showToast('Still starting. Nothing was sent twice.'); return null }
+  // What is sent must be remembered: with storage full a restart could forget a share.
+  if (!storageOk()) { useUi().showToast('Your phone\'s storage is full, so Kickback can\'t save what it sends. Free some space, then try again.'); return null }
+  moneyLock.value = name
+  let released = false
+  return () => { if (released) return; released = true; moneyLock.value = null }
+}
+
+async function withLock(name: string, fn: (release: () => void) => Promise<unknown>): Promise<void> {
+  const release = acquire(name)
+  if (!release) return
+  try { await fn(release) }
+  finally { release() }
+}
+
+/** A money action is starting, running or confirming: no mode, preview or wallet changes now. */
+export function moneyBusy(): boolean {
+  const flow = useFlow()
+  return moneyLock.value != null || flow.runPhase === 'running' || flow.wPhase === 'running' || useOps().active.length > 0
+}
+
+/** Diagnostics dry-run toggle. Refused mid-flight, so a dry run can't turn into a real one. */
+export function setDryMode(on: boolean): boolean {
+  if (moneyBusy()) { useUi().showToast('Wait until your plan or stake finishes.'); return false }
+  useDry().toggle(on)
+  restoreRun() // show (and keep saving) this mode's own run
+  return true
+}
+
 // ---------- stake / add to stake ----------
 
-export async function stakeLive() {
-  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
+export function stakeLive() {
   if (previewBlocked()) return
+  return withLock('stake', stakeLocked)
+}
+
+async function stakeLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
   if (useOps().active.some(o => o.flow === 'stake')) return ui.showToast('Your stake is still confirming. Nothing else to do.')
   // Degraded mode: the stake couldn't be read, so we can't tell a first stake from adding more.
   if (account.chainUnknown) return ui.showToast('Can\'t check your stake right now. Try again in a minute.')
   const pool = data.pool(flow.poolPick)
-  // Never send with a placeholder: the delegation must be a real validator address.
-  // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
-  if (!isValidAddress(pool.validator) || (pool.payoutType !== 'direct' && !isTestnet)) { ui.showToast('Pick a pool first.'); return go('pools') }
   const st = currentStaker()
   const isNew = !st || st.balance + st.inactiveBalance + st.retiredBalance === 0
+  // A new stake delegates: never to a placeholder, and (mainnet) only to a direct-payout pool.
+  // Testnet lists every active validator (no direct-payout pools there), so any of them can be picked.
+  // Adding stake keeps the current delegation, whatever kind of pool it is.
+  if (isNew && (!isValidAddress(pool.validator) || (pool.payoutType !== 'direct' && !isTestnet))) { ui.showToast('Pick a pool first.'); return go('pools') }
   if (!isNew && !sameAddr(st!.delegation, pool.validator)) return ui.openSheet('switch')
   const amount = parseNimInput(flow.amount)
   const bal = await freshBalanceOrToast()
@@ -105,6 +152,7 @@ export async function stakeLive() {
   const req: SendRequest = isNew ? { kind: 'newStaker', value: amount, delegation: pool.validator } : { kind: 'addStake', value: amount }
   flow.$patch({ approveKind: 'stake', approveFrom: 'stake', lastStakeLuna: amount, lastStakeAdd: !isNew })
   const { id, done } = startOp('stake', req)
+  release()
   flow.approveOpId = id
   go('approve')
   // Success as soon as it is sent: Home shows "Confirming your stake" until it is in a block.
@@ -118,17 +166,19 @@ export async function stakeLive() {
     })
     return
   }
-  if (op.phase === 'rejected') { back('stake'); ui.showToast('You cancelled. Nothing was staked.', { action: 'Try again', fn: stakeLive }) }
+  if (op.phase === 'rejected') { back('stake'); ui.showToast('You cancelled. Nothing was staked.', { action: 'Try again', fn: () => { void stakeLive() } }) }
   else fail(op.phase === 'failed' ? 'chainFailed' : 'notSent', 'stake')
 }
 
 // ---------- approvals that wait for the block (stop, undo, switch) ----------
 
-async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: OpFlow, req: SendRequest, meta: Op['meta'], onDone: () => void, cancelText: string) {
+async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: OpFlow, req: SendRequest, meta: Op['meta'], onDone: () => void, cancelText: string, release: () => void) {
   const flow = useFlow(), ui = useUi(), nav = useNav()
+  if (useOps().active.some(o => o.flow === opFlow)) return ui.showToast('That\'s still confirming. Nothing else to do.')
   const from = nav.screen === 'approve' ? 'pool' : (nav.screen ?? 'pool')
   flow.$patch({ approveKind: kind, approveFrom: from })
   const { id, done } = startOp(opFlow, req, meta)
+  release()
   flow.approveOpId = id
   go('approve')
   const op = await done
@@ -139,27 +189,31 @@ async function approveAndConfirm(kind: 'unstake' | 'keep' | 'switch', opFlow: Op
   else ui.showToast('That didn\'t go through. Nothing was sent.')
 }
 
-export async function stopLive() {
-  const ui = useUi()
+export function stopLive() {
   if (previewBlocked()) return
-  const st = currentStaker()
-  if (!st || st.balance === 0) return ui.showToast('Nothing is earning right now.')
-  await approveAndConfirm('unstake', 'unstake', { kind: 'setActive', value: 0 }, undefined, () => {
-    go('pool')
-    ui.showToast('Unstaking started. Nothing else to do.')
-  }, 'You cancelled. You\'re still earning.')
+  return withLock('stop', async (release) => {
+    const ui = useUi()
+    const st = currentStaker()
+    if (!st || st.balance === 0) return ui.showToast('Nothing is earning right now.')
+    await approveAndConfirm('unstake', 'unstake', { kind: 'setActive', value: 0 }, undefined, () => {
+      go('pool')
+      ui.showToast('Unstaking started. Nothing else to do.')
+    }, 'You cancelled. You\'re still earning.', release)
+  })
 }
 
-export async function undoLive() {
-  const ui = useUi()
+export function undoLive() {
   if (previewBlocked()) return
-  const st = currentStaker()
-  if (!st || st.inactiveBalance === 0) return ui.showToast('There\'s nothing to reactivate.')
-  const all = st.balance + st.inactiveBalance
-  await approveAndConfirm('keep', 'keep', { kind: 'setActive', value: all }, undefined, () => {
-    go(useNav().screen === 'home' ? 'home' : 'pool')
-    ui.showToast('You\'re earning again. Nothing was unstaked.')
-  }, 'You cancelled. Unstaking continues.')
+  return withLock('undo', async (release) => {
+    const ui = useUi()
+    const st = currentStaker()
+    if (!st || st.inactiveBalance === 0) return ui.showToast('There\'s nothing to reactivate.')
+    const all = st.balance + st.inactiveBalance
+    await approveAndConfirm('keep', 'keep', { kind: 'setActive', value: all }, undefined, () => {
+      go(useNav().screen === 'home' ? 'home' : 'pool')
+      ui.showToast('You\'re earning again. Nothing was unstaked.')
+    }, 'You cancelled. Unstaking continues.', release)
+  })
 }
 
 /**
@@ -167,9 +221,13 @@ export async function undoLive() {
  * is active and the inactive stake is released (staker.rs update_staker).
  * Then one update transaction moves it and reactivates everything.
  */
-export async function switchLive() {
-  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
+export function switchLive() {
   if (previewBlocked()) return
+  return withLock('switch', switchLocked)
+}
+
+async function switchLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), data = useData(), ui = useUi()
   const st = currentStaker()
   const target = data.pool(flow.poolPick)
   if (!st) return go('stake')
@@ -185,7 +243,7 @@ export async function switchLive() {
   await approveAndConfirm('switch', 'switch', { kind: 'updateStaker', value: 0, newDelegation: target.validator }, { from: st.delegation, effectiveAt }, () => {
     go('pool')
     ui.showToast(`Switch to ${target.name} started. Nothing else to do.`)
-  }, 'You cancelled. Nothing changed.')
+  }, 'You cancelled. Nothing changed.', release)
 }
 
 /** Hours until stake stopped now would be released (for the switch sheet). */
@@ -250,7 +308,10 @@ export function syncRunSteps() {
   const map = (list: RunStep[]) => list.map((s) => {
     if (!s.opId) return s
     const op = ops.byId(s.opId)
-    if (!op) return s
+    if (!op) {
+      if (s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming') { changed = true; return { ...s, st: 'unknown' as StepState } }
+      return s
+    }
     const st = PHASE_TO_STEP[op.phase]
     if (st !== s.st || !!op.slow !== !!s.slow) { changed = true; return { ...s, st, slow: !!op.slow } }
     return s
@@ -267,22 +328,31 @@ export function syncRunSteps() {
   if (!withdrawing && flow.wPhase === 'running' && !busy(flow.wSteps)) { flow.wPhase = 'review'; persistRun() }
 }
 
-function persistRun() {
-  const flow = useFlow(), addr = me()
-  if (!addr) return
-  prefSet('run:' + addr.replace(/\s/g, ''), JSON.stringify({ runPhase: flow.runPhase, doneMode: flow.doneMode, steps: flow.steps, runAmountLuna: flow.runAmountLuna, wSteps: flow.wSteps, wPhase: flow.wPhase }))
+/** Dry-run and real runs are stored apart, so one can never be resumed or retried as the other. */
+const runKey = () => 'run:' + me().replace(/\s/g, '') + (useWallet().isDry ? ':dry' : '')
+
+export function persistRun() {
+  const flow = useFlow()
+  if (!me()) return
+  prefSet(runKey(), JSON.stringify({ runPhase: flow.runPhase, doneMode: flow.doneMode, steps: flow.steps, runAmountLuna: flow.runAmountLuna, wSteps: flow.wSteps, wPhase: flow.wPhase, runDry: flow.runDry }))
 }
 
 /** After a restart: bring back an unfinished run so it resumes checking (never re-sends). */
 export function restoreRun() {
   const flow = useFlow(), ops = useOps()
   try {
-    const r = JSON.parse(prefGet('run:' + me().replace(/\s/g, '')) || 'null')
-    if (!r) return
-    flow.$patch({ runPhase: r.runPhase, doneMode: r.doneMode, steps: r.steps, runAmountLuna: r.runAmountLuna, wSteps: r.wSteps || [], wPhase: r.wPhase || 'review' })
+    const r = JSON.parse(prefGet(runKey()) || 'null')
+    if (!r) { flow.$patch({ runPhase: 'review', steps: [], wSteps: [], wPhase: 'review', runDry: undefined }); return }
+    flow.$patch({ runPhase: r.runPhase, doneMode: r.doneMode, steps: r.steps, runAmountLuna: r.runAmountLuna, wSteps: r.wSteps || [], wPhase: r.wPhase || 'review', runDry: r.runDry })
     syncRunSteps()
     // Steps that never started stay unsent: the run ends as partial with Retry.
-    const finish = (list: RunStep[]) => list.map(s => (s.st === 'pending' || s.st === 'waiting') && !(s.opId && ops.byId(s.opId) && !TERMINAL.includes(ops.byId(s.opId)!.phase)) ? { ...s, st: 'skipped' as StepState } : s)
+    // A step that never started is unsent. One whose op is gone (pruned from storage) may have
+    // gone out: it is "unknown", and Retry searches the chain for it first.
+    const finish = (list: RunStep[]) => list.map((s) => {
+      const op = s.opId ? ops.byId(s.opId) : undefined
+      if (s.opId && !op && s.st !== 'approved' && s.st !== 'cancelled') return { ...s, st: 'unknown' as StepState }
+      return (s.st === 'pending' || s.st === 'waiting') && !(op && !TERMINAL.includes(op.phase)) ? { ...s, st: 'skipped' as StepState } : s
+    })
     if (flow.runPhase === 'running' && !flow.steps.some(s => s.opId && !TERMINAL.includes(ops.byId(s.opId)?.phase ?? 'confirmed'))) {
       flow.$patch({ steps: finish(flow.steps) })
       finishRunLive()
@@ -301,9 +371,13 @@ function setStep(i: number, patch: Partial<RunStep>, key: 'steps' | 'wSteps' = '
 }
 
 /** Hold to run my plan. */
-export async function runPlanLive() {
-  const flow = useFlow(), account = useAccount(), ui = useUi(), ops = useOps(), plan = usePlan()
+export function runPlanLive() {
   if (previewBlocked()) return
+  return withLock('run', runLocked)
+}
+
+async function runLocked(release: () => void) {
+  const flow = useFlow(), account = useAccount(), ui = useUi(), ops = useOps(), plan = usePlan()
   if (flow.runPhase === 'running' || ops.active.some(o => o.flow === 'run')) return ui.showToast('Your plan is already running.')
   if (plan.planStartedAt == null) return ui.showToast('Save your plan first.')
   if (account.readyLuna > 0 && account.readyLuna < plan.minReadyLuna) return ui.showToast(`Your plan runs once ${minLabel(plan.minReadyLuna)} NIM is ready.`)
@@ -318,10 +392,11 @@ export async function runPlanLive() {
   const runId = crypto.randomUUID()
   const steps = planned.map(s => ({ ...s, runId }))
   flow.$patch({
-    runPhase: 'running', doneMode: 'full', steps, runAmountLuna: amount, runNote: note,
+    runPhase: 'running', doneMode: 'full', steps, runAmountLuna: amount, runNote: note, runDry: useWallet().isDry,
     runCapped: capped ? `Your wallet can spend ${NIM(spendable(bal))} NIM after a small fee reserve, so this run shares ${NIM(amount)} NIM.` : '',
   })
   persistRun()
+  release()
   await processSteps(0)
 }
 
@@ -345,7 +420,8 @@ async function walkSteps(from: number) {
     const req: SendRequest = s.type === 'send'
       ? { kind: 'payment', value: s.luna!, recipient: s.recipient!, data: 'Kickback' }
       : { kind: 'addStake', value: s.luna! }
-    const { id, done } = startOp('run', req, { step: i })
+    // The share is recorded by the ops store when this op confirms (also after a restart).
+    const { id, done } = startOp('run', req, { step: i, luna: s.luna!, type: s.type, ...(s.runId ? { runId: s.runId } : {}) })
     setStep(i, { opId: id, st: 'waiting' })
     const op = await untilNot(id, ['approving', 'checking'])
     if (op.phase === 'rejected') {
@@ -357,8 +433,19 @@ async function walkSteps(from: number) {
     }
     if (op.phase === 'confirming' || op.phase === 'confirmed') {
       if (s.type === 'send' || s.type === 'restake') fxStep(s.type)
-      // Recorded as shared once it is in a block; failures stay ready to share.
-      done.then((final) => { if (final.phase === 'confirmed') plan.recordShared(s.luna ?? 0, final.hash, final.dry, s.type === 'send' ? 'send' : 'restake', s.runId); syncRunSteps(); maybeFinish() })
+      // Until one transaction has shown who signed it, the next step waits for this one's block.
+      const ops = useOps()
+      if (!op.dry && !ops.signerOk) {
+        await untilNot(id, ['confirming'])
+        if (ops.signerMismatch) {
+          flow.steps = flow.steps.map((x, j) => j > i && x.st === 'pending' ? { ...x, st: 'skipped' } : x)
+          persistRun()
+          syncRunSteps()
+          return
+        }
+      }
+      // Recorded as shared by the ops store once it is in a block; failures stay ready to share.
+      done.then(() => { syncRunSteps(); maybeFinish() })
     }
     syncRunSteps()
   }
@@ -374,24 +461,99 @@ function maybeFinish() {
 
 function finishRunLive() {
   const flow = useFlow()
-  const partial = flow.steps.some(s => s.st === 'failed' || s.st === 'skipped')
+  const partial = flow.steps.some(s => s.st === 'failed' || s.st === 'skipped' || s.st === 'unknown')
   flow.$patch({ runPhase: 'done', doneMode: partial ? 'partial' : 'full', doneKey: flow.doneKey + 1 })
   persistRun()
 }
 
 /** Retry only what didn't go out (failed, skipped, cancelled). Amounts stay as planned. */
-export async function retryRunLive() {
-  const flow = useFlow(), ui = useUi()
+export function retryRunLive() {
   if (previewBlocked()) return
-  const todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled')
+  return withLock('retry', retryLocked)
+}
+
+/** Dry run or real for a stored run; runs saved before this was stored use their ops' mode. */
+function runWasDry(): boolean | undefined {
+  const flow = useFlow(), ops = useOps()
+  if (flow.runDry !== undefined) return flow.runDry
+  const op = flow.steps.map(s => s.opId && ops.byId(s.opId)).find(Boolean)
+  return op ? op.dry : undefined
+}
+
+async function retryLocked(release: () => void) {
+  const flow = useFlow(), ui = useUi()
+  if (flow.runPhase === 'running' && flow.steps.some(s => s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming')) return ui.showToast('Your plan is already running.')
+  const wasDry = runWasDry()
+  if (wasDry === undefined) return ui.showToast('This run can\'t be retried. Close it and run your plan again.')
+  if (wasDry !== useWallet().isDry) return ui.showToast(wasDry ? 'That was a dry run. Turn dry run back on to retry it, or run your plan again.' : 'That was a real run. Turn dry run off to retry it.')
+  const again = (st: StepState) => st === 'failed' || st === 'skipped' || st === 'cancelled' || st === 'unknown'
+  let todo = flow.steps.map((s, i) => ({ s, i })).filter(({ s }) => again(s.st))
   if (!todo.length) return
+  // A step that may have gone out (uncertain error, or its op is gone) is looked for first.
+  const found = await recheckUnsure(todo)
+  if (found === 'blocked') return
+  todo = todo.filter(t => !found.has(t.i))
+  if (!todo.length) {
+    flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry })
+    persistRun()
+    syncRunSteps()
+    return
+  }
+  // Pay only contacts still in the plan, at the address it has now.
+  const sendTo = usePlan().slices.find(x => x.kind === 'send')
+  const plannedTo = sendTo?.kind === 'send' ? sendTo.contact.address : undefined
+  if (todo.some(({ s }) => s.type === 'send' && !sameAddr(s.recipient, plannedTo))) return ui.showToast('Your plan changed since this run. Close it and run your plan again.')
+  const ops = useOps()
   const need = todo.reduce((a, { s }) => a + (s.type === 'keep' ? 0 : s.luna ?? 0), 0)
+  // Still ready to share (another phone may have shared it meanwhile). Amounts held back for
+  // these steps' own uncertain attempts count as theirs.
+  const held = todo.reduce((a, { s }) => { const o = s.opId ? ops.byId(s.opId) : undefined; return a + (o && isHeld(o) ? o.req.value : 0) }, 0)
+  if (need > useAccount().readyLuna + held) return ui.showToast('That amount isn\'t ready to share any more. Close this run and check Home.')
   const bal = await freshBalanceOrToast()
   if (bal == null) return
   if (need > spendable(bal)) return ui.openSheet('fees')
-  flow.$patch({ runPhase: 'running', doneMode: 'full', steps: flow.steps.map(s => (s.st === 'failed' || s.st === 'skipped' || s.st === 'cancelled') ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
+  // The old uncertain attempts are replaced by this retry: they stop holding the amount.
+  for (const { s } of todo) { const o = s.opId ? ops.byId(s.opId) : undefined; if (o && isHeld(o)) ops.patch(o.id, { meta: { ...o.meta, superseded: 'retry' } }) }
+  flow.$patch({ runPhase: 'running', doneMode: 'full', runDry: wasDry, steps: flow.steps.map(s => again(s.st) ? { ...s, st: 'pending', opId: undefined, slow: false } : s) })
   persistRun()
+  release()
   await processSteps(todo[0].i)
+}
+
+/**
+ * Before a retry re-sends anything: for each step whose last attempt may have gone out (an
+ * uncertain error, or an op pruned from storage), refuse within 10 minutes of the error, then
+ * search the chain deeply. Found: follow that transaction instead (the step confirms and is
+ * recorded once). Can't read the chain: nothing is re-sent. Returns the step indexes found.
+ */
+async function recheckUnsure(todo: Array<{ s: RunStep, i: number }>): Promise<Set<number> | 'blocked'> {
+  const ops = useOps(), ui = useUi()
+  const found = new Set<number>()
+  const plan = usePlan()
+  for (const { s, i } of todo) {
+    if (s.type === 'keep' || !s.opId) continue
+    // Already recorded under this step's op id: it went out.
+    if (plan.ledger.some(e => e.id === s.opId)) { setStep(i, { st: 'approved' }); found.add(i); continue }
+    const op = ops.byId(s.opId)
+    if (op && !(op.phase === 'not-sent' && op.uncertainAt != null) && !(op.phase === 'rejected' && op.softCancel)) continue
+    if (op?.uncertainAt && Date.now() - op.uncertainAt < UNCERTAIN_HOLD_MS && !op.dry) {
+      const min = Math.max(1, Math.ceil((op.uncertainAt + UNCERTAIN_HOLD_MS - Date.now()) / 60e3))
+      ui.showToast(`Still checking if it went through. You can retry in about ${min} min. Nothing was sent twice.`)
+      return 'blocked'
+    }
+    const req: SendRequest = op?.req ?? (s.type === 'send' ? { kind: 'payment', value: s.luna!, recipient: s.recipient!, data: 'Kickback' } : { kind: 'addStake', value: s.luna! })
+    // A pruned op is at least a day old: search as deep as we can.
+    const hash = await searchWide(me(), req, op?.startedAt ?? 0, ops.knownHashes(s.opId))
+    if (hash === UNKNOWN) {
+      ui.showToast('Can\'t check the network right now, so nothing was sent again. Try again in a minute.')
+      return 'blocked'
+    }
+    if (!hash) continue
+    const opId = ops.adopt('run', req, me(), hash, { step: i, luna: s.luna!, type: s.type, ...(s.runId ? { runId: s.runId } : {}) }, s.opId)
+    setStep(i, { opId, st: 'confirming' })
+    found.add(i)
+  }
+  return found
 }
 
 // ---------- withdraw (retire, then remove) ----------
@@ -400,8 +562,7 @@ export async function retryRunLive() {
  * Withdraw released stake. Inactive stake must be retired first, and only the
  * whole retired balance can be removed (staker.rs retire_stake/remove_stake).
  */
-export function withdrawSteps(): RunStep[] {
-  const st = currentStaker()
+export function withdrawSteps(st: Staker | null = currentStaker()): RunStep[] {
   if (!st) return []
   const steps: RunStep[] = []
   if (st.inactiveBalance > 0) steps.push({ type: 'retire', luna: st.inactiveBalance, amt: st.inactiveBalance / 1e5, label: `Unlock ${NIM(st.inactiveBalance)} NIM`, st: 'pending' })
@@ -420,13 +581,34 @@ export function openWithdraw() {
   go('withdraw')
 }
 
-export async function runWithdraw() {
-  const flow = useFlow()
+export function runWithdraw() {
   if (previewBlocked()) return
+  return withLock('withdraw', withdrawLocked)
+}
+
+/** The staker as the chain has it now (dry run: the fake chain). Null when it can't be read fresh. */
+async function freshStaker(): Promise<Staker | null | 'unread'> {
+  if (useWallet().isDry) return useDry().chain.staker
+  try {
+    const r = await getStaker(me(), 0)
+    return r.stale ? 'unread' : r.value
+  }
+  catch { return 'unread' }
+}
+
+async function withdrawLocked(release: () => void) {
+  const flow = useFlow(), ui = useUi()
   if (flow.wPhase === 'running') return
-  flow.wPhase = 'running'
+  if (useOps().active.some(o => o.flow === 'withdraw')) return ui.showToast('Your withdrawal is still confirming. Nothing else to do.')
+  // Steps from the review screen can be old (a retire may have gone through): rebuild them now.
+  const st = await freshStaker()
+  if (st === 'unread') return ui.showToast('Couldn\'t read your stake. Nothing was sent. Try again in a moment.')
+  const steps = withdrawSteps(st)
+  if (!steps.length) { flow.$patch({ wSteps: [], wPhase: 'review' }); persistRun(); return ui.showToast('Nothing to withdraw right now.') }
+  flow.$patch({ wSteps: steps, wPhase: 'running' })
   withdrawing = true
   persistRun()
+  release()
   try { await walkWithdraw() }
   finally { withdrawing = false }
 }
@@ -452,7 +634,10 @@ async function walkWithdraw() {
 /** Clear finished run/withdraw state when leaving them. */
 export function clearFinished() {
   const flow = useFlow()
-  if (flow.runPhase === 'done') flow.$patch({ runPhase: 'review', steps: [] })
+  // A run stopped by a cancel (nothing in flight) ends here too, so it never stays "running".
+  const busy = flow.steps.some(s => s.st === 'waiting' || s.st === 'checking' || s.st === 'confirming')
+  const stuck = flow.runPhase === 'running' && !processing && !busy && flow.steps.some(s => s.st === 'cancelled')
+  if (flow.runPhase === 'done' || stuck) flow.$patch({ runPhase: 'review', steps: [], runDry: undefined })
   if (flow.wPhase === 'done') flow.$patch({ wPhase: 'review', wSteps: [] })
   persistRun()
 }

@@ -1,7 +1,8 @@
-// Edge Function test for sync (deployed project, testnet, a freshly generated wallet key):
+// Edge Function test for sync (testnet, a freshly generated wallet key):
 // a plan whose send slice names one of the user's contacts is stored with that contact_id,
 // exactly; one naming a missing contact (or none) is rejected and the stored plan is unchanged.
-// Usage: node e2e/sync-api.mjs
+// Replacing the contact list is all or nothing: a rejected list leaves the stored one as it was.
+// Usage: node e2e/sync-api.mjs [functionsBaseUrl]   (default: the local stack, supabase start + functions serve)
 import { randomBytes } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { blake2b } from '@noble/hashes/blake2.js'
@@ -9,7 +10,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { createNimiqVerifier, signedMessageData } from '../supabase/functions/_shared/nimiqSignature.ts'
 import { signInMessage } from '../supabase/functions/_shared/signin.ts'
 
-const FN = 'https://dhjcilstkumeglweddev.supabase.co/functions/v1'
+const FN = process.argv[2] || 'http://127.0.0.1:54321/functions/v1'
 const results = []
 const log = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`) }
 const hex = b => Buffer.from(b).toString('hex')
@@ -41,6 +42,16 @@ const none = await call('sync', { method: 'PUT', token, body: { plan: { slices: 
 log('send 10% with no contact is rejected (not turned into send 0 / keep 70)', none.status === 400 && /needs one of your contacts/.test(none.data.error), `HTTP ${none.status} ${none.data.error}`)
 const after = (await call('sync', { method: 'GET', token })).data
 log('the stored plan is unchanged by the rejected saves', JSON.stringify(after.plan?.slices) === JSON.stringify(good), JSON.stringify(after.plan?.slices))
+
+// Audit 15: a contacts PUT that fails half way (two new contacts with the same address) must not
+// have removed the old ones already.
+const dupAddr = 'NQ51 KVXF RMYV 9HPD CA8N 5X10 7SUY 2C29 MU2T'
+const bad = await call('sync', { method: 'PUT', token, body: { contacts: [{ id: 'cA', name: 'A', contact_address: dupAddr }, { id: 'cB', name: 'B', contact_address: dupAddr }] } })
+log('a contact list with the same address twice is rejected', bad.status === 400, `HTTP ${bad.status} ${bad.data.error}`)
+const kept = (await call('sync', { method: 'GET', token })).data
+log('the rejected list changed nothing: the old contact and the plan are still there', JSON.stringify(kept.contacts?.map(c => c.id)) === JSON.stringify([contact.id]) && JSON.stringify(kept.plan?.slices) === JSON.stringify(good), JSON.stringify(kept.contacts?.map(c => c.id)))
+const swap = await call('sync', { method: 'PUT', token, body: { contacts: [{ ...contact, name: 'Minos N' }, { id: 'c2', name: 'Two', contact_address: dupAddr }] } })
+log('a valid replacement renames and adds in one go', swap.status === 200 && swap.data.contacts?.length === 2 && swap.data.contacts.find(c => c.id === contact.id)?.name === 'Minos N', JSON.stringify(swap.data.contacts))
 
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
 process.exit(results.every(Boolean) ? 0 : 1)

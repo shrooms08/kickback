@@ -25,16 +25,34 @@ export function checkProxyRequest(body: unknown): ProxyCheck {
 }
 
 /**
- * The caller's IP: Cloudflare's header, then the gateway's x-real-ip, then the LAST x-forwarded-for
- * hop (added by the proxy in front of us). The first hop is whatever the caller wrote: never trusted.
+ * The caller's IP. On Supabase the gateway sits behind Cloudflare, which sets cf-connecting-ip
+ * itself (a caller's own value is replaced). Without it (local stack), the LAST x-forwarded-for
+ * hop, added by the proxy in front of us. The first hop and x-real-ip can be written by the
+ * caller: never trusted.
  */
 export function clientIp(h: Headers): string {
   const cf = h.get('cf-connecting-ip')?.trim()
-  if (cf) return cf
-  const real = h.get('x-real-ip')?.trim()
-  if (real) return real
+  if (cf) return ipKey(cf)
   const hops = (h.get('x-forwarded-for') ?? '').split(',').map(s => s.trim()).filter(Boolean)
-  return hops[hops.length - 1] ?? 'unknown'
+  return hops.length ? ipKey(hops[hops.length - 1]) : 'unknown'
+}
+
+/**
+ * The rate-limit key of an IP: IPv4 as it is, IPv6 as its /64 (one subscriber usually gets a
+ * whole /64, so per-address keys would be free to rotate). IPv4-mapped IPv6 is plain IPv4.
+ * Anything that doesn't parse is kept as written.
+ */
+export function ipKey(raw: string): string {
+  const a = raw.trim().replace(/^\[|\]$/g, '').replace(/%.*$/, '').toLowerCase()
+  if (!a.includes(':')) return a
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a)
+  if (mapped) return mapped[1]
+  const parts = a.split('::')
+  if (parts.length > 2) return a
+  const head = parts[0] ? parts[0].split(':') : [], tail = parts.length === 2 && parts[1] ? parts[1].split(':') : []
+  const groups = parts.length === 2 ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail] : head
+  if (groups.length !== 8 || !groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) return a
+  return groups.slice(0, 4).map(g => g.replace(/^0+(?=.)/, '')).join(':') + '::/64'
 }
 
 /** Fixed-window counter per key (IP). When full, expired windows are evicted (never a global reset). */

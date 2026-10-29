@@ -6,7 +6,8 @@
 export type Network = 'mainnet' | 'testnet'
 export interface Session { address: string, network: Network, iat: number, exp: number }
 
-export const SESSION_DAYS = 30
+/** Tokens last 7 days (no server-side revocation list): a stolen token is good for a week at most. */
+export const SESSION_DAYS = 7
 const enc = new TextEncoder()
 
 function b64url(bytes: Uint8Array): string {
@@ -44,6 +45,8 @@ export async function verifySession(secret: string, token: string | null | undef
     const p = JSON.parse(new TextDecoder().decode(fromB64url(parts[1])))
     if (typeof p.address !== 'string' || (p.network !== 'mainnet' && p.network !== 'testnet')) return null
     if (typeof p.exp !== 'number' || p.exp * 1000 <= now) return null
+    // Also by age, so tokens issued for 30 days before the change expire after 7 too.
+    if (typeof p.iat !== 'number' || now - p.iat * 1000 > SESSION_DAYS * 86400e3) return null
     return { address: p.address, network: p.network, iat: p.iat, exp: p.exp }
   }
   catch {

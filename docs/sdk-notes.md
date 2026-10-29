@@ -102,14 +102,15 @@ Same as Nimcade and the Nimiq docs: `server: { host: true, port: 5173 }` in `vit
 
 | Type | Code | Kickback treats it as |
 |---|---|---|
-| `PERMISSION_DENIED` | 4001 | **Cancelled.** "You cancelled. Nothing was sent." |
+| `PERMISSION_DENIED` | 4001 | **Cancelled.** "You cancelled. Nothing was sent." Also `USER_REJECTED`, `USER_CANCELLED` / `USER_CANCELED`, `CANCELLED` / `CANCELED`, `REJECTED`, `ACTION_REJECTED` (names other hosts use for the same thing). |
+| `TRANSACTION_OUTCOME_UNKNOWN` | | Unknown: search the chain. Never a cancel. |
 | `UNKNOWN_REQUEST` | 4200 | Not sent: the host doesn't support the request. |
 | `INVALID_TRANSACTION` | -32602 | Not sent: bad parameters. |
 | `NETWORK_ERROR` | -32000 | If the message says "Nimiq network is not ready", the host is still syncing, so it **retries 5 times** (1, 2, 3, 4, 5 s) before sending anything. Otherwise **unknown**: search the chain. |
 | `INTERNAL_ERROR` | -32603 | Unknown: search the chain. |
 | `UNKNOWN_ERROR` (or any other type) | any | Unknown: search the chain. |
 
-**After an unknown error:** check the newest 25 transactions of the address every 5 s, for up to 60 s. Matching is by sender, recipient, value and the staking data type byte (`05` CreateStaker, `06` AddStake, `07` UpdateStaker, `08` SetActiveStake, `09` RetireStake). The result is then either "sent, confirming" or "Failed. Nothing was sent."
+**After an unknown error:** the op stays "Still checking if it went through" for **10 minutes** (elapsed time shown, nothing can be sent again meanwhile): the newest 25 transactions of the address every 5 s for the first minute, then every 20 s. Then a deep search decides: the address history paged to at least 200 transactions and 2 hours back (at most 500), plus `mempoolContent(true)`. Matching is by sender, recipient, value, payment data (`Kickback`) and the staking data type byte (`05` CreateStaker, `06` AddStake, `07` UpdateStaker, `08` SetActiveStake, `09` RetireStake). Hashes already in the share ledger never match. The result is "sent, confirming", "Failed. Nothing was sent." (a JSON-RPC node answered both reads), or it keeps checking (only REST, the proxy, or nothing answered).
 
 **Confirming:** poll RPC `getTransactionByHash(hash)` every 4 s.
 - `-32603 "Transaction not found: …"` means not yet.
@@ -118,7 +119,11 @@ Same as Nimcade and the Nimiq docs: `server: { host: true, port: 5173 }` in `vit
 
 **Never twice:**
 - Each send is an op persisted per address in localStorage. Reopening the app resumes checking (a chain search or inclusion polling) and never re-sends.
-- Run my plan and Withdraw steps are persisted too. A run that can't continue ends as partial, with Retry for only the unsent amounts.
+- Run my plan and Withdraw steps are persisted too, dry-run and real runs under separate keys. A run that can't continue ends as partial, with Retry for only the unsent amounts. A step whose op was pruned is "Not sure it went through".
+- A run step's share is recorded by the ops store when its op confirms, with the op id (a uuid) as the ledger and server share id, so a resumed op is counted exactly once.
+- Retry first searches the chain deeply for every step that may have gone out (uncertain error or pruned op), follows a found transaction instead of paying again, and sends nothing within 10 minutes of the error or while the chain can't be read. It refuses a run of the other mode (dry run vs real).
+- One money action starts at a time: a lock is taken before the first await (balance read), so a second hold does nothing. Dry run, preview and Choose wallet can't change while anything is starting, running or confirming.
+- Right before every send: the recipient must be a valid Nimiq address (checksum) and not your own, a delegation a valid validator address. When a sent transaction is included, its sender must be the connected address (for remove stake: its recipient); otherwise Kickback stops sending and says so.
 
 ### `getBalance` on the phone
 - The first call 272 ms after boot failed with `NETWORK_ERROR -32000 "Nimiq network is not ready"`.

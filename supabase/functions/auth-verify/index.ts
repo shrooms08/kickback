@@ -1,7 +1,8 @@
 // auth-verify: POST { address, network, nonce, publicKey, signature } -> { token, expiresAt }.
 // The nonce must be unused and under 5 minutes old (it is burned on the first try). The
 // signature is checked over the sign-in message rebuilt from the nonce row, and the public key
-// must derive to the claimed address. The token is a 30-day JWT signed with SESSION_SECRET.
+// must derive to the claimed address. The token is a 7-day JWT signed with SESSION_SECRET.
+// Rate limited in Postgres: AUTH_VERIFY_IP_MAX tries per caller IP per 10 minutes (default 30).
 import { blake2b } from 'npm:@noble/hashes@2.4.0/blake2.js'
 import { sha256 } from 'npm:@noble/hashes@2.4.0/sha2.js'
 import { ed25519 } from 'npm:@noble/curves@2.4.0/ed25519.js'
@@ -11,6 +12,10 @@ import { createNimiqVerifier, hexToBytes, normalizeAddress } from '../_shared/ni
 import { signSession } from '../_shared/session.ts'
 import { NONCE_TTL_MS, signInMessage } from '../_shared/signin.ts'
 import { ValidationError, validateNetwork } from '../_shared/validate.ts'
+import { allowHit, limitFromEnv } from '../_shared/rateLimit.ts'
+import { clientIp } from '../_shared/rpcProxy.ts'
+
+const IP_MAX = limitFromEnv('AUTH_VERIFY_IP_MAX', 30)
 
 const secret = Deno.env.get('SESSION_SECRET')
 if (!secret || secret.length < 32) throw new Error('SESSION_SECRET must be set (32+ characters).')
@@ -25,6 +30,7 @@ Deno.serve(async (req) => {
   const cors = corsHeaders(req, Deno.env.get('ALLOWED_ORIGINS') ?? '')
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405, cors)
+  if (!(await allowHit(`verify:ip:${clientIp(req.headers)}`, 600, IP_MAX))) return json({ error: 'Too many sign-in attempts. Try again in a few minutes.' }, 429, cors)
   const body = await readJson(req)
   try {
     const network = validateNetwork(body?.network)

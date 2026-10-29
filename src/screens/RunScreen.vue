@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import Modal from '../components/Modal.vue'
 import TheStack from '../components/TheStack.vue'
 import HoldButton from '../components/HoldButton.vue'
@@ -10,9 +10,10 @@ import { useAccount } from '../stores/account'
 import { usePlan } from '../stores/plan'
 import { useUi } from '../stores/ui'
 import { useWallet } from '../stores/wallet'
+import { useOps } from '../stores/ops'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import { int0, nim2, nimParts } from '../lib/format'
-import { now } from '../lib/time'
+import { checkingLine, now } from '../lib/time'
 import { ranksOf, splitCents } from '../lib/plan'
 import { splitLuna } from '../lib/money'
 import { shake } from '../lib/anim'
@@ -46,7 +47,7 @@ const emptyBar = computed(() => !live.value || (a.staked && !a.notDirect))
 const srec = computed(() => plan.contact(plan.savedRecipient))
 const SLICE: Record<RunStep['type'], number> = { send: 0, restake: 1, keep: 2, retire: 1, remove: 2 }
 const live = computed(() => !wallet.isMock)
-const notSent = (x: RunStep) => x.st === 'failed' || (live.value && (x.st === 'skipped' || x.st === 'cancelled'))
+const notSent = (x: RunStep) => x.st === 'failed' || x.st === 'unknown' || (live.value && (x.st === 'skipped' || x.st === 'cancelled'))
 const failed = computed<number[]>(() => flow.steps.filter(notSent).map(x => SLICE[x.type]))
 // Live: the exact Luna split of what this run shares (capped by the wallet); mock: the prototype's cents.
 const split = computed(() => live.value ? splitLuna(flow.runAmountLuna, plan.saved).map(v => v / 1e5) : splitCents(a.readyCents, plan.saved))
@@ -93,17 +94,25 @@ const ST: Record<RunStep['st'], [string, string]> = {
   cancelled: ['You cancelled', 'var(--kb-text-2)'],
   failed: ['Didn\'t go through. Still in your wallet.', 'var(--kb-text-2)'],
   skipped: ['Not sent', 'var(--kb-text-3)'],
+  unknown: ['Not sure it went through. Retry checks the network first.', 'var(--kb-text-2)'],
 }
+// "Still checking" counts up every second.
+const tick = ref(Date.now())
+const tickTimer = window.setInterval(() => { tick.value = Date.now() }, 1000)
+onBeforeUnmount(() => clearInterval(tickTimer))
+const ops = useOps()
 const steps = computed(() => flow.steps.map((x, i) => ({
   ...x,
   n: i + 1,
-  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : ST[x.st][0],
+  status: x.auto && x.st === 'pending' ? 'No approval needed' : x.auto && x.st === 'waiting' ? 'Keeping…' : x.st === 'confirming' && x.slow ? 'Still confirming. It will update here.' : x.st === 'checking' && live.value ? checkingLine(ops.byId(x.opId)?.uncertainAt, tick.value) : ST[x.st][0],
   color: ST[x.st][1],
   canRetry: running.value && x.st === 'cancelled',
 })))
 const stuck = computed(() => running.value && flow.steps.some(x => x.st === 'cancelled') && !flow.steps.some(x => x.st === 'waiting' || x.st === 'checking' || x.st === 'confirming'))
 
-const doneText = (x: RunStep) => notSent(x)
+const doneText = (x: RunStep) => x.st === 'unknown'
+  ? `Not sure "${x.label}" went through. Retry checks the network before sending.`
+  : notSent(x)
   ? `${x.label} didn't go through`
   : x.type === 'send' ? `${nim2(x.amt)} NIM sent to ${srec.value.name}` : x.type === 'restake' ? `${nim2(x.amt)} NIM restaked` : `${nim2(x.amt)} NIM kept in your wallet`
 
@@ -179,9 +188,9 @@ function retryStep(n: number) { if (live.value) retryFailed(); else process(n) }
 
     <div v-else-if="done" class="kb-row-list">
       <div v-for="(s, i) in flow.steps" :key="i" class="kb-row done-row">
-        <Icon v-if="s.st !== 'failed'" name="check" :size="18" :stroke="2.6" color="var(--kb-lime)" />
+        <Icon v-if="!notSent(s)" name="check" :size="18" :stroke="2.6" color="var(--kb-lime)" />
         <Icon v-else name="close" :size="18" :stroke="2.6" color="var(--kb-error)" />
-        <span :style="{ color: s.st === 'failed' ? 'var(--kb-text-2)' : 'var(--kb-text)' }">{{ doneText(s) }}</span>
+        <span :style="{ color: notSent(s) ? 'var(--kb-text-2)' : 'var(--kb-text)' }">{{ doneText(s) }}</span>
       </div>
     </div>
 

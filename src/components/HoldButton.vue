@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref } from 'vue'
 import Icon from './Icon.vue'
 import { useUi } from '../stores/ui'
 import { reducedMotion } from '../lib/anim'
+import { moneyLock } from '../lib/moneyLock'
 
 // Hold to confirm. The lime fill and the knob move with WAAPI transforms,
 // so holding never re-renders anything per frame. Release early and it
@@ -86,7 +87,8 @@ function animateTo(to: number, ms: number, easing: string, ease: (k: number) => 
 
 function down(e: PointerEvent) {
   if (props.disabled) return emit('blocked', e)
-  if (done.value) return
+  // A money action is still starting (balance read, approval): a second hold does nothing.
+  if (done.value || moneyLock.value) return
   try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }
   catch { /* not capturable */ }
   width = track.value!.offsetWidth
@@ -128,7 +130,7 @@ onBeforeUnmount(() => { stop(); clearTimeout(timer); if (pressed.value) ui.holdi
   >
     <Icon name="lock" :size="18" />{{ label }}
   </div>
-  <div v-else class="wrap" :class="{ pressed }">
+  <div v-else class="wrap" :class="{ pressed, busy: !!moneyLock }" :aria-busy="!!moneyLock">
     <div
       ref="track" class="track" role="button" :aria-label="label"
       @pointerdown="down" @pointerup="up" @pointerleave="up" @pointercancel="up"
@@ -149,6 +151,7 @@ onBeforeUnmount(() => { stop(); clearTimeout(timer); if (pressed.value) ui.holdi
 <style scoped>
 .wrap { position: relative; transition: transform var(--kb-dur-press) var(--kb-ease); }
 .wrap.pressed { transform: scale(var(--kb-hold-scale)); }
+.wrap.busy { opacity: .55; pointer-events: none; }
 .track {
   position: relative; height: 64px; border-radius: 999px; background: var(--kb-lime-soft);
   border: 1px solid rgba(200, 240, 74, .35); overflow: hidden; cursor: pointer;

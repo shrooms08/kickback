@@ -162,8 +162,11 @@ export async function signMessage(message: string): Promise<{ publicKey: string,
 
 export type SubmitResult =
   | { status: 'sent', hash: string }
-  /** The user closed or declined the Nimiq Pay confirmation. */
-  | { status: 'rejected' }
+  /**
+   * The user closed or declined the Nimiq Pay confirmation. `soft`: a cancel name the SDK itself
+   * doesn't define, so a retry checks the chain first.
+   */
+  | { status: 'rejected', soft?: true }
   /** The host refused before sending (bad parameters, unsupported, still syncing). */
   | { status: 'not-sent', error: string }
   /** Network or unknown error after the request reached the wallet: it may have gone out. Check the chain. */
@@ -201,10 +204,18 @@ export async function submit(req: SendRequest): Promise<SubmitResult> {
   }
 }
 
+/**
+ * How hosts say the user declined or closed the approval. The SDK maps EIP-1193 code 4001 to
+ * PERMISSION_DENIED; the others are names hosts and wallets use for the same thing.
+ * TRANSACTION_OUTCOME_UNKNOWN is not a cancel: it may have gone out.
+ */
+const CANCEL_TYPES = new Set(['PERMISSION_DENIED', 'USER_REJECTED', 'USER_CANCELLED', 'USER_CANCELED', 'CANCELLED', 'CANCELED', 'REJECTED', 'ACTION_REJECTED'])
+
 /** Map a wallet error to what we can honestly say about it. */
 export function classify(error: unknown): SubmitResult {
   if (NimiqProviderError.is(error)) {
     if (error.type === 'PERMISSION_DENIED' || error.code === 4001) return { status: 'rejected' }
+    if (CANCEL_TYPES.has(error.type)) return { status: 'rejected', soft: true }
     if (isHostNotReady(error)) return { status: 'not-sent', error: describe(error) }
     if (error.type === 'INVALID_TRANSACTION' || error.type === 'UNKNOWN_REQUEST') return { status: 'not-sent', error: describe(error) }
   }

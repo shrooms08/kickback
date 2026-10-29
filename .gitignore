@@ -22,3 +22,6 @@ npm-debug.log*
 # Vercel CLI link
 .vercel
 .superpowers/
+
+# spike script output (raw RPC/API responses)
+docs/spike/data/

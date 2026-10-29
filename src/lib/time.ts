@@ -70,3 +70,10 @@ export function ago(t: number, ref = Date.now()): string {
   const s = span(ref - t)
   return s === 'just now' ? s : `${s} ago`
 }
+
+/** Step or approval status while an uncertain send is being looked for on chain. */
+export function checkingLine(since: number | undefined, t = Date.now()): string {
+  if (since == null) return 'Checking if it went through…'
+  const s = Math.max(0, Math.floor((t - since) / 1000)), m = Math.floor(s / 60)
+  return `Still checking if it went through (${m ? `${m}m ${s % 60}s` : `${s}s`}). Nothing is sent twice.`
+}

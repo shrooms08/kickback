@@ -29,6 +29,18 @@ Other details: the reward rate is the **Nimiq staking calculator** rate (nimiq.c
 `src/lib/rate.ts`) minus the pool fee; calendar reminders (.ics) for the next kickback or every kickback for two weeks;
 wallet picker for several basic accounts (contracts are skipped); no dollar amount below $0.01 is ever shown.
 
+## Screenshots
+
+Images go in `docs/screenshots/`.
+
+| Screen | Image |
+|---|---|
+| Home | <!-- screenshot: home.png --> |
+| Run my plan | <!-- screenshot: run-my-plan.png --> |
+| Season | <!-- screenshot: season.png --> |
+| Share card | <!-- screenshot: share-card.png --> |
+| Pools | <!-- screenshot: pools.png --> |
+
 ## Nimiq integration
 
 `@nimiq/mini-app-sdk` 0.2.4 (`src/services/nimiq.ts`), every call the app makes:
@@ -81,6 +93,14 @@ nimiq.com's `/api/staking-info`. `@nimiq/utils` for address checksums.
   transactions.
 - Preview, dry run and mock mode never sign in, never write and never earn.
 
+**Why `verify_jwt = false`.** Every function in `supabase/config.toml` turns off the Supabase gateway JWT check on
+purpose. Kickback has no Supabase Auth users, so callers never hold a Supabase Auth JWT. Sign-in is a wallet signature
+instead: `auth-verify` checks the Ed25519 signature, then issues its own HS256 session JWT (signed with
+`SESSION_SECRET`, 30 days). The app sends it as `Authorization: Bearer <token>`, and `sync` and `season` verify it
+themselves (`supabase/functions/_shared/session.ts`). The gateway would reject that token because it is not signed with
+the project's JWT secret. The cron functions (`pool-stats-cron`, `xp-cron`) check an `X-Cron-Secret` header against a
+secret kept in Vault instead. `auth-nonce`, `stats` and `rpc-proxy` are public by design.
+
 ## Run locally
 
 ```bash
@@ -103,6 +123,7 @@ npm run build      # vue-tsc type check + production build
 - `supabase/migrations`, `supabase/functions`
 - `design/Kickback Prototype.html`: the design source of truth
 - `docs/`: SDK notes, staking lifecycle, data notes, backend, testnet
+- `docs/spike/`: the read-only research spike done before the build (report and helper scripts)
 
 ## License
 

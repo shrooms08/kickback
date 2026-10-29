@@ -1,6 +1,6 @@
 # Kickback — Read-only Research Spike
 
-Data captured **2026-10-21 ~06:00 UTC** (mainnet head block ≈ 64,769,800, epoch 1420). No transactions were sent and no keys were used. Helper scripts and raw responses are in [`spike/`](spike/) (raw JSON in `spike/data/`).
+Data captured **2026-10-21 ~06:00 UTC** (mainnet head block ≈ 64,769,800, epoch 1420). No transactions were sent and no keys were used. The helper scripts are in this folder. They write raw responses to `data/`, which is not committed: run the scripts again for fresh data. Staker addresses from the original run are left out.
 
 ---
 
@@ -50,9 +50,9 @@ Method: page back through the payout address with `getTransactionsByAddress(addr
 
 | Pool | Recent payouts? | Latest payout (UTC) | Interval | Txs per run | Sample tx hash | Sample recipient → amount |
 |---|---|---|---|---|---|---|
-| **Nimiq.Fun** | ✅ 9 runs in 4 days | **2026-10-21 02:30:02** (block 64,757,128) | **~11.95 h**. Drifts ~3 min earlier each run; looks tied to epochs (epoch ≈ 11.8 h). Seen: 10-17 02:54, 14:50; 10-18 02:48, 14:44; … 10-21 02:30 | 38 (pool has 40 stakers) | `bd7bfb209e6161fb372d96715d79207b06ef8dba847d61e060a9ca413e261a59` | NQ78 G9Q9 JUCM N8GC R6FM 67MS 254L N05S YR1E → **10.6036 NIM** (run total ≈ 6,225 NIM) |
-| **ObsidianStake** | ✅ 8 runs in 3.75 days | **2026-10-21 00:00:13** (block 64,748,106) | **12.00 h, exactly 00:00 and 12:00 UTC** | 144–151 (pool has 153 stakers) | `83ed6076394015642f74c314d5678890a028cf381a52ce58304279dad4a72145` | NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5 → **205.74176 NIM** (run total ≈ 58,512 NIM; amounts range from 0.014 to 6,688 NIM) |
-| CHIPMUNK POOL | ❌ **dead** | 2025-07-07 13:00:03 (block 23,519,077) | Was hourly-ish before it stopped. Only **1** distinct recipient in the 500-tx window | 1–2 | `c7bc2b7257bab003515a3704a70d2b254cdcf877a89e8c1fb66721c64ee940ed` | NQ19 AU8X YUN2 AK6C 9DL1 5E6V F79A VLH0 8G7D → 209.63523 NIM |
+| **Nimiq.Fun** | ✅ 9 runs in 4 days | **2026-10-21 02:30:02** (block 64,757,128) | **~11.95 h**. Drifts ~3 min earlier each run; looks tied to epochs (epoch ≈ 11.8 h). Seen: 10-17 02:54, 14:50; 10-18 02:48, 14:44; … 10-21 02:30 | 38 (pool has 40 stakers) | `bd7bfb209e6161fb372d96715d79207b06ef8dba847d61e060a9ca413e261a59` | a staker → **10.6036 NIM** (run total ≈ 6,225 NIM) |
+| **ObsidianStake** | ✅ 8 runs in 3.75 days | **2026-10-21 00:00:13** (block 64,748,106) | **12.00 h, exactly 00:00 and 12:00 UTC** | 144–151 (pool has 153 stakers) | `83ed6076394015642f74c314d5678890a028cf381a52ce58304279dad4a72145` | a staker → **205.74176 NIM** (run total ≈ 58,512 NIM; amounts range from 0.014 to 6,688 NIM) |
+| CHIPMUNK POOL | ❌ **dead** | 2025-07-07 13:00:03 (block 23,519,077) | Was hourly-ish before it stopped. Only **1** distinct recipient in the 500-tx window | 1–2 | `c7bc2b7257bab003515a3704a70d2b254cdcf877a89e8c1fb66721c64ee940ed` | a staker → 209.63523 NIM |
 
 The staker-side view was cross-checked: `getTransactionsByAddress(<sample recipient>, 50, null)` returned 50/50 transactions sent from the pool's payout address, every 12 h. This is the cheap query a mini app would make.
 
@@ -70,11 +70,11 @@ The staker-side view was cross-checked: `getTransactionsByAddress(<sample recipi
 | CORS | **YES.** Preflight `OPTIONS` → 204 with `access-control-allow-origin: *`, `-allow-methods: POST`, `-allow-headers: content-type`. POST → 200 with `access-control-allow-origin: *`. |
 | Rate limit | `x-ratelimit-remaining` / `x-ratelimit-reset` headers. The budget was **20 units per ~10 s window** (per IP, presumably). `getBlockNumber` and `getTransactionsByAddress(max=50)` cost 1 unit each; `getTransactionsByAddress(max=500)` cost **5**. Going over gives **HTTP 429** `{"error":"Rate limit exceeded"}`, which I hit during the spike. |
 
-`getStakerByAddress("NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5")` (an ObsidianStake recipient):
+`getStakerByAddress("<staker address>")` (an ObsidianStake recipient):
 
 ```json
 {
-  "address": "NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",
+  "address": "<staker address>",
   "balance": 170441199815,          // active stake, Luna (= 1,704,412 NIM)
   "delegation": "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV",
   "inactiveBalance": 0,
@@ -116,16 +116,16 @@ Fields: `address, balance, delegation, inactiveBalance, inactiveFrom, retiredBal
 
 ## Raw commands used
 
-All scripts are in `spike/` and use Node 24 (Node 18+ works) with built-in `fetch`. They are read-only.
+All scripts are in this folder (`docs/spike/`) and use Node 24 (Node 18+ works) with built-in `fetch`. They are read-only.
 
 ```bash
 # 1. Validators API (README -> base URL), with CORS origin header
 curl -sL https://raw.githubusercontent.com/nimiq/validators-api/main/README.md
 curl -s -D - -H "Origin: https://example.vercel.app" \
-  "https://validators-api-main.je-cf9.workers.dev/api/v1/validators" -o spike/data/validators.json
+  "https://validators-api-main.je-cf9.workers.dev/api/v1/validators" -o data/validators.json
 curl -s "https://validators-api-main.je-cf9.workers.dev/api/v1/validators?only-known=false&payout-type=direct"
 curl -s "https://validators-api-main.je-cf9.workers.dev/api/v1/validators/NQ32%201U9X%207P3X%20B2H5%20XA00%205LC2%205KFE%20VBQE%20X3BU"
-curl -s "https://validators-api-main.je-cf9.workers.dev/api/v1/status" > spike/data/status.json
+curl -s "https://validators-api-main.je-cf9.workers.dev/api/v1/status" > data/status.json
 curl -s -D - -o /dev/null -X OPTIONS -H "Origin: https://example.vercel.app" -H "Access-Control-Request-Method: GET" \
   "https://validators-api-main.je-cf9.workers.dev/api/v1/validators"
 # schema / types / raw validator files (payoutAddress lives only here)
@@ -143,18 +143,18 @@ curl -s -D - -X OPTIONS https://rpc.nimiqwatch.com -H "Origin: https://example.v
 curl -s -D - https://rpc.nimiqwatch.com -H "Origin: https://example.vercel.app" -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"getBlockNumber","params":[]}'
 curl -s https://rpc.nimiqwatch.com -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getTransactionsByAddress","params":["NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5",50,null]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getTransactionsByAddress","params":["<staker address>",50,null]}'
 curl -s https://rpc.nimiqwatch.com -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getStakerByAddress","params":["NQ98 HGEF CD04 RHPK GYT6 YM9S U0CY PA0M CGD5"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getStakerByAddress","params":["<staker address>"]}'
 
-# Node helpers (spike/)
-cd spike
+# Node helpers (docs/spike/)
+cd docs/spike
 node validators.mjs                       # getValidatorByAddress for the 3 direct pools -> rewardAddress, inactivityFlag
 node payouts.mjs                          # latest 500 txs per payout address
 node payout_history.mjs "Nimiq.Fun"     "NQ16 373T EQ2V JX5B ME74 G056 3TA9 75L3 P717" 4   # paginated, payout runs + gaps
 node payout_history.mjs "ObsidianStake" "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV" 4
-node staker.mjs                           # getStakerByAddress / getAccountByAddress / AddStake payout tx
-node staker_view.mjs                      # payouts as seen from the staker's own address
+node staker.mjs "<staker address>"       # getStakerByAddress / getAccountByAddress / AddStake payout tx
+node staker_view.mjs "<staker address>" "NQ15 5JNS U7CE RAH5 3T02 F8A9 JCT6 QMG9 7TSV"   # payouts as seen from the staker's own address
 
 # 6. Minimum stake
 curl -sL https://raw.githubusercontent.com/nimiq/core-rs-albatross/albatross/primitives/src/policy.rs | grep -n -A2 MINIMUM_STAKE
