@@ -16,7 +16,7 @@ import { anim, longest, release, settleWithin, track } from '../lib/anim'
 import { logNav, navlog } from '../lib/navlog'
 import type { Running } from '../lib/anim'
 import { back } from '../router'
-import { clearTimers, goPools, refreshStale, retryOnline } from '../flows'
+import { clearTimers, goPools, refreshStale, retryOnline, switchWallet } from '../flows'
 import { useWallet } from '../stores/wallet'
 import { addressShort } from '../lib/format'
 import { now, span } from '../lib/time'
@@ -418,7 +418,7 @@ function modalDown(e: PointerEvent) {
     </template>
 
     <div v-if="testnetOn" class="preview testnet" role="status" data-kb="testnet-strip"><span class="pdot" />Testnet: test NIM only</div>
-    <div v-if="previewOn" class="preview" :class="{ dry: !wallet.isPreview }" :style="testnetOn ? { top: 'calc(var(--kb-safe-top) + var(--kb-preview-h))' } : undefined" role="status"><span class="pdot" />{{ previewText }}</div>
+    <div v-if="previewOn" class="preview" :class="{ dry: !wallet.isPreview }" :style="testnetOn ? { top: 'calc(var(--kb-safe-top) + var(--kb-preview-h))' } : undefined" role="status"><span class="pdot" />{{ previewText }}<button v-if="wallet.previewingOther" class="pclear" data-kb="preview-strip-clear" @click="switchWallet(wallet.address)">Use my wallet</button></div>
     <Banner v-if="banner" :kind="banner.kind" :text="banner.text" :label="banner.label" :style="{ top: bannerTop }" @act="banner.act()" />
 
     <div v-if="chrome" :ref="setChrome" class="chrome" :style="{ zIndex: chrome.z, transform: chrome.tf, borderRadius: chrome.r }">
@@ -450,6 +450,7 @@ function modalDown(e: PointerEvent) {
   border-bottom: 1px solid var(--kb-line); font-size: 12px; font-weight: 700; color: var(--kb-text-2); letter-spacing: .02em;
 }
 .pdot { width: 6px; height: 6px; border-radius: 50%; background: var(--kb-second); }
+.pclear { border: none; background: none; padding: 0 0 0 4px; font: inherit; color: var(--kb-lime); text-decoration: underline; text-underline-offset: 3px; }
 .preview.dry { color: var(--kb-lime); }
 .preview.dry .pdot { background: var(--kb-lime); }
 .preview.testnet { color: var(--kb-third); background: color-mix(in srgb, var(--kb-third) 14%, var(--kb-raised)); }

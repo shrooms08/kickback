@@ -53,8 +53,11 @@ export const useDiag = defineStore('diag', {
     rpcLoading: false,
   }),
   actions: {
+    /** Record an error for Diagnostics and log it to the console (remote WebView debugging). */
     error(where: string, error: unknown) {
-      this.errors.push(describeError(where, error))
+      const e = describeError(where, error)
+      this.errors.push(e)
+      console.warn(`[kickback] ${where}: ${e.type ? `${e.type} ` : ''}${e.message}${e.data ? ` data=${e.data}` : ''}`)
     },
     recordBalance(raw: unknown, ms: number) {
       this.balanceReads.push({

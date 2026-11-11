@@ -9,10 +9,12 @@ Checked on 2026-10-21.
 - The SDK exposes `getHostNetwork()` (`@nimiq/mini-app-sdk` 0.2.4), which just reads `window.nimiqPay.network`: `'mainnet' | 'testnet'`, or `undefined` outside Nimiq Pay and on host versions older than the field.
 - Nimiq Pay seeds it before the page script runs (`window.__NIMIQ_PAY__ = { lang, userFiat, network: isTestnet ? 'testnet' : 'mainnet' }` in `src/lib/mini-app-launcher.ts` of nimiq/nimiq-pay-app).
 - **It cannot change while the app is open.** The SDK README says these values "are static for the lifetime of a Mini App session"; a change is picked up the next time the Mini App opens. Inside Nimiq Pay, switching network reloads the whole app (`router.go(0)`), which closes the Mini App.
-- Kickback therefore decides once at startup (`src/lib/net.ts`):
-  1. dev builds only: `?net=test` (wins, also over a faked host, for Playwright);
-  2. the host network from the SDK;
-  3. otherwise mainnet (browser, dev preview, older hosts).
+- Kickback resolves it before the app loads (`src/main.ts`, `src/lib/net.ts`):
+  1. dev builds only: `?net=test` / `?net=main` (wins, also over a faked host, for Playwright);
+  2. the host network from the SDK, polled for up to 2 s in case `window.nimiqPay` arrives late;
+  3. otherwise mainnet, flagged as not reported: Home shows "Network not reported by Nimiq Pay" and Diagnostics shows `Network reported: NO`.
+- Only `src/lib/net.ts` is loaded before that; the rest of the app (RPC pool, storage prefix, genesis block) is imported after the network is applied.
+- If the host value still shows up later (within 20 s) and names another network, Kickback reloads once from Welcome on that network (remembered for the session).
 - Diagnostics shows the network, where it came from, the RPC URL, the API URL and the explorer.
 
 ## Endpoints

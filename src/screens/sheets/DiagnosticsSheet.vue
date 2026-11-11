@@ -160,7 +160,8 @@ const lines = computed(() => {
     ['window.nimiqPay', `at boot: ${diag.hostContextAtBoot ? 'yes' : 'no'} · now: ${window.nimiqPay ? 'yes' : 'no'}`],
     ['window.nimiq', `at boot: ${diag.nimiqAtBoot ? 'yes' : 'no'} · now: ${window.nimiq ? 'yes' : 'no'}`],
     ['Host network / language', `${host.network || 'n/a'} / ${host.language || 'n/a'}`],
-    ['Network', `${net.network} · from ${net.source} · network id ${net.networkId} · genesis block ${net.genesisBlock}`],
+    ['Network reported', net.reported ? 'yes' : 'NO: Network not reported by Nimiq Pay (default used)'],
+    ['Network', `${net.network} · from ${net.source} · network id ${net.networkId} · genesis block ${net.genesisBlock}${net.error ? ` · ERROR ${net.error}` : ''}`],
     ['RPC URLs', rpcPool.status().map(e => e.kind === 'direct' ? e.url : e.kind === 'rest' ? `REST fallback ${e.url}` : `rpc-proxy ${e.url}`).join(' · ')],
     ['RPC active', rpcHealth.active ? rpcHealth.active.replace('https://', '') : 'none: every endpoint is waiting to be retried (degraded mode)'],
     ['RPC endpoints', (void rpcHealth.tick, rpcPool.status().map(e => `${e.kind === 'proxy' ? 'proxy' : e.url.replace('https://', '')}: ${e.state}${e.latencyMs != null ? ` ${e.latencyMs} ms` : ''}${e.lastError ? ` (${e.lastError})` : ''}`).join(' · '))],
@@ -183,6 +184,8 @@ const lines = computed(() => {
     ['Preview address', wallet.previewAddress || 'off'],
     ['Dry run', dry.on ? `ON · next answer: ${dry.outcome} · fake balance ${nim2(dry.chain.balanceLuna / 1e5)} NIM · fake staker ${dry.chain.staker ? `${nim2(dry.chain.staker.balance / 1e5)} active / ${nim2(dry.chain.staker.inactiveBalance / 1e5)} inactive / ${nim2(dry.chain.staker.retiredBalance / 1e5)} retired` : 'none'} · ${dry.txs.length} fake txs` : 'off'],
     ['Reading', wallet.effectiveAddress || 'n/a'],
+    ['Wallet balance', wallet.balanceSource ? `${nim2(wallet.balanceLuna / 1e5)} NIM · from ${wallet.balanceSource === 'cache' ? 'saved value (STALE)' : wallet.balanceSource} · read ${ago(wallet.balanceAt)}` : 'not known yet'],
+    ['Balance error', wallet.balanceError || 'none'],
   ]
   if (accounts && accounts.length > 1) accounts.slice(1).forEach((a, i) => out.push([`accounts[${i + 1}]`, a]))
   if (!diag.balanceReads.length) out.push(['getBalance', 'not called'])

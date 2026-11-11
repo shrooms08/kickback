@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
+import NetworkWarning from '../components/NetworkWarning.vue'
 import NimAmount from '../components/NimAmount.vue'
 import SegmentedBar from '../components/SegmentedBar.vue'
 import TheStack from '../components/TheStack.vue'
@@ -15,7 +16,7 @@ import { NIM_USD } from '../services/mock'
 import { useData } from '../stores/data'
 import { useWallet } from '../stores/wallet'
 import { ago, span, now } from '../lib/time'
-import { nim2, nimParts } from '../lib/format'
+import { addressShort, nim2, nimParts } from '../lib/format'
 import { ranksOf, splitCents } from '../lib/plan'
 import { goAddContact, goPlan, goPoolTab, shareNow } from '../flows'
 import { usd } from '../lib/usd'
@@ -33,7 +34,13 @@ const stakedParts = computed(() => nimParts(a.stakedNim))
 // Wallet: the fake balance in dry run, RPC getAccountByAddress in preview, getBalance otherwise.
 const walletParts = computed(() => nimParts(a.walletNim))
 const walletKnown = computed(() => wallet.balanceKnown)
-const walletSub = computed(() => wallet.isPreview ? 'Preview address' : wallet.isDry ? 'Dry run balance' : 'Free to spend')
+const walletSub = computed(() => {
+  if (wallet.isPreview) return 'Preview address'
+  if (wallet.isDry) return 'Dry run: simulated balance'
+  if (wallet.balanceStale) return wallet.balanceError ? `Saved ${ago(wallet.balanceAt)}, couldn't refresh` : `Saved ${ago(wallet.balanceAt)}, refreshing…`
+  if (!wallet.balanceKnown && wallet.balanceError) return "Couldn't read your balance"
+  return 'Free to spend'
+})
 // Live new staker: the big countdown is to their own first kickback.
 const firstPending = computed(() => live.value && a.firstPending)
 
@@ -103,6 +110,7 @@ const poolPaid = computed(() => {
   <div class="kb-scroll">
     <div class="kb-page" style="gap: 22px">
       <AppHeader />
+      <NetworkWarning />
 
       <div v-if="mode === 'normal'" class="block14">
         <div class="hl"><h1 class="kb-h1">{{ headline }}</h1><button class="bell kb-press" aria-label="Remind me" data-kb="bell" @click="ui.openSheet('remind')"><Icon name="bell" :size="20" /></button></div>
@@ -156,6 +164,7 @@ const poolPaid = computed(() => {
           <div v-if="walletKnown" class="mini-v kb-num" style="color: var(--kb-numc)" data-kb="wallet-amt">{{ walletParts[0] }}<span class="kb-dim">{{ walletParts[1] }}</span> NIM</div>
           <div v-else class="mini-v kb-dim">…</div>
           <div class="meta">{{ walletSub }}</div>
+          <div class="meta kb-num" data-kb="wallet-addr">{{ addressShort(wallet.effectiveAddress) }}</div>
         </div>
         <div class="mini kb-press-soft" @click="goPoolTab">
           <div class="kb-eyebrow">Staked</div>
