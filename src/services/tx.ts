@@ -7,6 +7,7 @@ import { submit } from './nimiq'
 import type { SubmitResult } from './nimiq'
 import type { SendRequest } from './sendTypes'
 import { useDry } from '../stores/dry'
+import { isOwn, ownContracts } from '../lib/walletAccounts'
 
 export const CHECK_WINDOW_MS = 60_000
 /** After an uncertain error nothing is offered again for this long ("Still checking if it went through"). */
@@ -54,15 +55,17 @@ const utf8Hex = (text: string) => Array.from(new TextEncoder().encode(text), b =
 /** Does this on-chain transaction look like the one we tried to send? */
 export function matches(tx: Tx & { recipientData?: string }, req: SendRequest, me: string): boolean {
   if (tx.executionResult === false) return false
+  // Nimiq Pay pays and stakes out of the wallet's HTLC remote account, so "from me" means the
+  // wallet address or any HTLC Nimiq Pay has listed for it (src/lib/walletAccounts.ts).
   switch (req.kind) {
     case 'payment':
-      return sameAddr(tx.from, me) && paidAs(tx, req)
+      return isOwn(me, tx.from) && paidAs(tx, req)
     case 'remove':
       // Paid out of the staking contract to us. The fee (when there is one) comes out of the
       // removed amount, so the value is the amount, or the amount minus this tx's fee.
-      return sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, me) && (tx.value === req.value || tx.value + (tx.fee ?? 0) === req.value)
+      return sameAddr(tx.from, STAKING_CONTRACT) && isOwn(me, tx.to) && (tx.value === req.value || tx.value + (tx.fee ?? 0) === req.value)
     default: {
-      if (!sameAddr(tx.from, me) || !sameAddr(tx.to, STAKING_CONTRACT)) return false
+      if (!isOwn(me, tx.from) || !sameAddr(tx.to, STAKING_CONTRACT)) return false
       const t = TYPE_BYTE[req.kind]
       if (tx.recipientData && t && !tx.recipientData.startsWith(t)) return false
       if (req.kind === 'newStaker' || req.kind === 'addStake') return tx.value === req.value
@@ -105,13 +108,16 @@ export async function findOnChain(me: string, req: SendRequest, since: number, o
       if (h) return h
     }
     else {
-      try {
-        const r = await rpc<Tx[]>('getTransactionsByAddress', [me, 25, null], { noStore: true })
-        const hit = (r.value || []).find(t => t.timestamp >= since - MATCH_SLACK_MS && !skip.has(t.hash) && matches(t, req, me))
-        if (hit) return hit.hash
-        if (rpcSource(r.value) === 'direct') directReads++
+      // The wallet address, then its two newest HTLC accounts (Nimiq Pay sends out of the HTLC).
+      for (const addr of [me, ...ownContracts(me).slice(0, 2)]) {
+        try {
+          const r = await rpc<Tx[]>('getTransactionsByAddress', [addr, 25, null], { noStore: true })
+          const hit = (r.value || []).find(t => t.timestamp >= since - MATCH_SLACK_MS && !skip.has(t.hash) && matches(t, req, me))
+          if (hit) return hit.hash
+          if (addr === me && rpcSource(r.value) === 'direct') directReads++
+        }
+        catch { /* keep looking until the window closes */ }
       }
-      catch { /* keep looking until the window closes */ }
     }
     const left = end - Date.now()
     onTick?.(Math.max(0, left))
@@ -148,6 +154,15 @@ export async function searchWide(me: string, req: SendRequest, since: number, sk
     }
   }
   catch { return UNKNOWN }
+  // Nimiq Pay sends out of the wallet's HTLC: those transactions are in the HTLC's history.
+  for (const addr of ownContracts(me).slice(0, 2)) {
+    try {
+      const r = await rpc<Tx[]>('getTransactionsByAddress', [addr, 100, null], { noStore: true })
+      const hit = (r.value || []).find(t => t.timestamp >= since - MATCH_SLACK_MS && ok(t))
+      if (hit) return hit.hash
+    }
+    catch { return UNKNOWN }
+  }
   // A payment Nimiq Pay signed from another account never shows in this address's history:
   // look at the recipient's side too (the signer check then stops further sends).
   if (req.kind === 'payment' && req.recipient) {
