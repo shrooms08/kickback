@@ -9,6 +9,7 @@ import { useUi } from './ui'
 import { isValidAddress } from '../lib/address'
 import { STAKING_CONTRACT, sameAddr, spaced } from '../services/chain'
 import { addressShort } from '../lib/format'
+import { isOwn } from '../lib/walletAccounts'
 import type { Tx } from '../services/chain'
 import { isUuid, uuid } from '../lib/uuid'
 
@@ -260,7 +261,8 @@ export const useOps = defineStore('ops', {
      */
     checkSigner(op: Op, tx: Tx) {
       if (op.dry || !this.address) return
-      const ours = op.req.kind === 'remove' ? sameAddr(tx.from, STAKING_CONTRACT) && sameAddr(tx.to, op.address) : sameAddr(tx.from, op.address)
+      // Nimiq Pay pays out of the wallet's HTLC remote account: that is the wallet's own, not another signer.
+      const ours = op.req.kind === 'remove' ? sameAddr(tx.from, STAKING_CONTRACT) && isOwn(op.address, tx.to) : isOwn(op.address, tx.from)
       if (ours) {
         if (!this.signerOk) { this.signerOk = true; prefSet(this.key(this.address) + ':signerok', '1') }
         return

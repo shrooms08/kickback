@@ -164,6 +164,23 @@ export async function connectAccount(): Promise<ConnectedAccount> {
 }
 
 /**
+ * Nimiq Pay replaces its HTLC remote account (about weekly, and on top-ups) and then emits
+ * `accountsChanged` with the new list (SDK 0.2.5). Hosts without the event: returns false.
+ */
+export async function onAccountsChanged(cb: (accounts: string[]) => void): Promise<boolean> {
+  const nimiq = await getProvider()
+  if (typeof (nimiq as unknown as { on?: unknown }).on !== 'function') return false
+  try {
+    nimiq.on('accountsChanged', (accounts: unknown) => cb(Array.isArray(accounts) ? accounts.filter((a): a is string => typeof a === 'string') : []))
+    return true
+  }
+  catch (error) {
+    useDiag().error('accountsChanged', error)
+    return false
+  }
+}
+
+/**
  * Sign a text message with the wallet (Nimiq Pay shows it and asks first). The host signs
  * SHA-256("\x16Nimiq Signed Message:\n" + byte length + message) with Ed25519 and returns
  * hex strings (nimiq-pay-app useMiniAppHost.ts). Rejection throws a NimiqProviderError

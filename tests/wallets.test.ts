@@ -20,8 +20,7 @@ describe('wallet picker: Nimiq Pay\'s account first, other basic accounts to vie
   it('a brand-new account the RPC does not know yet counts as basic', () => {
     expect(pickBasic([A, B], { [A]: 'basic', [B]: 'unknown' }).basic).toEqual([A, B])
   })
-  it('an account whose type could not be read is still offered (a slow node must not hide the picker)', () => {
-    expect(pickBasic([A, B], { [A]: null, [B]: null }).basic).toEqual([A, B])
-    expect(pickBasic([A, B], { [A]: 'basic' }).basic).toEqual([A, B])
+  it('an account that could not be read is not offered (the primary always is)', () => {
+    expect(pickBasic([A, B], { [A]: null, [B]: null }).basic).toEqual([A])
   })
 })

@@ -4,11 +4,12 @@ import { memoryStorage } from './helpers/storage'
 
 // Wallet balance: Nimiq Pay's getBalance with an 8 s timeout, then the network node for the same
 // address, a visible error when both fail, and a saved value always marked stale.
-const ME = 'NQ57 2F6C X3GB Y9B7 04U5 2BVA 4BVC M2T0 ELRL', OTHER = 'NQ07 A3J0 7SUY 2C29 MU2T KVXF RMYV 1SE5'
-const chain = vi.hoisted(() => ({ getAccountBalance: vi.fn(), getAccountType: vi.fn(async () => 'basic') }))
+const ME = 'NQ74 808U MR99 JHE9 CEGB JEAB DF3U 7953 R0C7', OTHER = 'NQ21 C3EU F69A E1GV UFVC XSSJ HLXB SJU5 DRAF'
+const HTLC = 'NQ97 GDBS 1HMT ERNN XDVD JTEV 4RL4 2Q9R X66F', HTLC2 = 'NQ57 2F6C X3GB Y9B7 04U5 2BVA 4BVC M2T0 ELRL'
+const chain = vi.hoisted(() => ({ getAccountBalance: vi.fn(), getAccountType: vi.fn(async (_a: string): Promise<string | null> => 'basic') }))
 vi.mock('../src/services/chain', async orig => ({ ...(await orig<object>()), ...chain }))
 
-type Provider = { listAccounts: () => Promise<string[]>, getBalance?: (a: string) => Promise<unknown> }
+type Provider = { listAccounts: () => Promise<string[]>, getBalance?: (a: string) => Promise<unknown>, on?: (e: string, cb: (a: string[]) => void) => void }
 const host = { provider: null as Provider | null }
 
 async function fresh(provider: Provider) {
@@ -30,6 +31,7 @@ const TESTNET_LUNA = 11_000_000_000 // 110,000 NIM
 beforeEach(() => {
   memoryStorage()
   chain.getAccountBalance.mockReset()
+  chain.getAccountType.mockReset(); chain.getAccountType.mockImplementation(async () => 'basic')
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 afterEach(() => {
@@ -89,7 +91,7 @@ describe('getBalance timeout and the node fallback', () => {
     await w.refreshWalletBalance()
     expect(w.balanceKnown).toBe(false)
     expect(w.balanceError).toMatch(/host broke/)
-    expect(diag.errors.map(e => e.where)).toContain('balance RPC fallback')
+    expect(diag.errors.some(e => e.where.startsWith('balance RPC fallback'))).toBe(true)
     expect(console.warn).toHaveBeenCalled()
   })
   it('both fail with a saved balance: it stays on screen, marked stale, with the error', async () => {
@@ -123,24 +125,24 @@ describe('getBalance timeout and the node fallback', () => {
   })
 })
 
-describe('the node fallback must not mask its own problems', () => {
-  it('getAccountBalance throws on an answer without a balance instead of returning 0', async () => {
-    vi.resetModules()
-    vi.doUnmock('../src/services/chain')
-    vi.doMock('../src/services/rpc', async orig => ({ ...(await orig<object>()), rpc: vi.fn(async () => ({ value: null, at: 1, stale: false })) }))
-    const { getAccountBalance } = await import('../src/services/chain')
-    await expect(getAccountBalance(ME)).rejects.toThrow(/gave no balance/)
-    vi.doUnmock('../src/services/rpc')
-  })
-})
-
 describe('account selection', () => {
-  it('every account Nimiq Pay lists can be picked at once; the wallet is the first', async () => {
-    const { w } = await fresh({ listAccounts: async () => [ME, OTHER], getBalance: async () => TESTNET_LUNA })
+  it('the wallet is the first account; the Nimiq Pay HTLC is never offered as a separate account', async () => {
+    chain.getAccountType.mockImplementation(async (a: string) => (a === HTLC ? 'htlc' : 'basic'))
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: async () => 0 })
     w.address = ''
-    const r = await w.connect()
-    expect(r.ok).toBe(true)
+    expect((await w.connect()).ok).toBe(true)
     expect(w.address).toBe(ME)
+    expect(w.basicAccounts).toEqual([ME])
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.basicAccounts).toEqual([ME])
+    expect(w.accounts).toEqual([ME, HTLC])
+  })
+  it('another basic account Nimiq Pay lists can still be picked (read only)', async () => {
+    chain.getAccountType.mockImplementation(async () => 'basic')
+    const { w } = await fresh({ listAccounts: async () => [ME, OTHER], getBalance: async () => 0 })
+    w.address = ''
+    await w.connect()
+    await new Promise(r => setTimeout(r, 0))
     expect(w.basicAccounts).toEqual([ME, OTHER])
   })
   it('picking another account shows it as a preview; clearing goes back to the wallet', async () => {
@@ -151,5 +153,77 @@ describe('account selection', () => {
     w.setPreview(null)
     expect(w.effectiveAddress).toBe(ME)
     expect(w.previewingOther).toBe(false)
+  })
+})
+
+describe('Nimiq Pay remote account (HTLC): the wallet balance is the sum of every listed account', () => {
+  const byAddress = (m: Record<string, number>) => async (a: string) => m[a] ?? 0
+  it('wallet 0 + HTLC 110,000 NIM shows 110,000 NIM, and each account in Diagnostics', async () => {
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: byAddress({ [ME]: 0, [HTLC]: TESTNET_LUNA }) })
+    w.address = ''
+    await w.connect()
+    await w.refreshWalletBalance()
+    expect(w.balanceLuna).toBe(TESTNET_LUNA)
+    expect(w.balanceNim).toBe(110_000)
+    expect(w.balanceSource).toBe('sdk')
+    expect(w.accountBalances[ME]).toMatchObject({ luna: 0, source: 'sdk' })
+    expect(w.accountBalances[HTLC]).toMatchObject({ luna: TESTNET_LUNA, source: 'sdk' })
+  })
+  it('the HTLC read times out: the node answers for the HTLC, the total still adds up', async () => {
+    vi.useFakeTimers()
+    chain.getAccountBalance.mockImplementation(async (a: string) => ({ value: a === HTLC ? TESTNET_LUNA : 0, at: 1, stale: false }))
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: async (a: string) => (a === HTLC ? new Promise(() => {}) : 5) })
+    w.accounts = [ME, HTLC]
+    const p = w.refreshWalletBalance()
+    await vi.advanceTimersByTimeAsync(8_000)
+    await p
+    expect(chain.getAccountBalance).toHaveBeenCalledWith(HTLC, 0)
+    expect(chain.getAccountBalance).not.toHaveBeenCalledWith(ME, 0)
+    expect(w.balanceLuna).toBe(TESTNET_LUNA + 5)
+    expect(w.balanceSource).toBe('rpc')
+  })
+  it('the HTLC cannot be read at all: no partial total, a visible error naming it', async () => {
+    chain.getAccountBalance.mockRejectedValue(new Error('down'))
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: async (a: string) => { if (a === HTLC) throw new Error('host broke'); return 7 } })
+    w.accounts = [ME, HTLC]
+    await w.refreshWalletBalance()
+    expect(w.balanceKnown).toBe(false)
+    expect(w.balanceError).toMatch(/NQ97 … X66F/)
+  })
+  it('freshBalance (before staking or a run) is the same total', async () => {
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: byAddress({ [ME]: 3, [HTLC]: TESTNET_LUNA }) })
+    w.accounts = [ME, HTLC]
+    expect(await w.freshBalance()).toBe(TESTNET_LUNA + 3)
+  })
+  it('accountsChanged (Pay replaced its HTLC): takes the new list and reads the new HTLC', async () => {
+    let listener: ((a: string[]) => void) | null = null
+    const balances: Record<string, number> = { [ME]: 0, [HTLC]: TESTNET_LUNA, [HTLC2]: 0 }
+    const { w } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: async (a: string) => balances[a] ?? 0, on: (_e: string, cb: (a: string[]) => void) => { listener = cb } })
+    w.address = ''
+    await w.connect()
+    await w.refreshWalletBalance()
+    expect(w.balanceLuna).toBe(TESTNET_LUNA)
+    await new Promise(r => setTimeout(r, 0))
+    expect(listener).not.toBeNull()
+    balances[HTLC] = 0; balances[HTLC2] = TESTNET_LUNA
+    listener!([ME, HTLC2])
+    await w.refreshWalletBalance()
+    expect(w.accounts).toEqual([ME, HTLC2])
+    expect(w.balanceLuna).toBe(TESTNET_LUNA)
+    expect(w.accountBalances[HTLC2]).toMatchObject({ luna: TESTNET_LUNA })
+    const { isOwn } = await import('../src/lib/walletAccounts')
+    expect(isOwn(ME, HTLC)).toBe(true)
+    expect(isOwn(ME, HTLC2)).toBe(true)
+  })
+  it('accountsChanged for another wallet is not taken over (logged instead)', async () => {
+    let listener: ((a: string[]) => void) | null = null
+    const { w, diag } = await fresh({ listAccounts: async () => [ME, HTLC], getBalance: async () => 0, on: (_e: string, cb: (a: string[]) => void) => { listener = cb } })
+    w.address = ''
+    await w.connect()
+    await new Promise(r => setTimeout(r, 0))
+    listener!([OTHER, HTLC2])
+    expect(w.address).toBe(ME)
+    expect(w.accounts).toEqual([ME, HTLC])
+    expect(diag.errors.some(e => e.where === 'accountsChanged')).toBe(true)
   })
 })

@@ -186,6 +186,11 @@ const lines = computed(() => {
     ['Reading', wallet.effectiveAddress || 'n/a'],
     ['Wallet balance', wallet.balanceSource ? `${nim2(wallet.balanceLuna / 1e5)} NIM · from ${wallet.balanceSource === 'cache' ? 'saved value (STALE)' : wallet.balanceSource} · read ${ago(wallet.balanceAt)}` : 'not known yet'],
     ['Balance error', wallet.balanceError || 'none'],
+    ...wallet.accounts.map((a, i): [string, string] => {
+      const b = wallet.accountBalances[a]
+      const v = !b ? 'not read yet' : b.luna == null ? `unknown${b.error ? ` (${b.error})` : ''}` : `${nim2(b.luna / 1e5)} NIM · from ${b.source === 'cache' ? 'saved node value (STALE)' : b.source} · ${ago(b.at)}`
+      return [`Account ${i + 1} (${i === 0 ? 'wallet, staking owner' : 'Nimiq Pay HTLC'})`, `${a} · ${v}`]
+    }),
   ]
   if (accounts && accounts.length > 1) accounts.slice(1).forEach((a, i) => out.push([`accounts[${i + 1}]`, a]))
   if (!diag.balanceReads.length) out.push(['getBalance', 'not called'])
