@@ -35,14 +35,38 @@ function cssUrl(name: string): string | null {
   return m ? m[1] : null
 }
 
-function loadImage(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((res) => {
+/** Fonts and skin tiles get this long; then the card is drawn without them. */
+export const CARD_WAIT_MS = 5000
+
+/** Resolve with `p`, or reject after `ms` (the card never waits forever on a WebView). */
+export function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const t = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what}: no answer after ${ms / 1000} s`)), ms) })
+  return Promise.race([p, t]).finally(() => clearTimeout(timer))
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
     const img = new Image()
     img.onload = () => res(img)
-    img.onerror = () => res(null)
+    img.onerror = () => rej(new Error('skin tile did not load'))
     img.src = src
   })
 }
+
+/**
+ * A skin tile as something a pattern can use. WebKit (iPhone, Nimiq Pay) taints a canvas that
+ * draws an SVG image directly, and toBlob then throws SecurityError; an ImageBitmap made from
+ * the same SVG does not taint (checked in Playwright WebKit). Falls back to the image itself.
+ */
+async function loadTile(src: string): Promise<CanvasImageSource> {
+  const img = await loadImage(src)
+  if (typeof createImageBitmap !== 'function') return img
+  try { return await createImageBitmap(img) }
+  catch { return img }
+}
+
+export type CardIssue = (what: string, error: unknown) => void
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
@@ -70,15 +94,42 @@ function drawK(ctx: CanvasRenderingContext2D, x: number, y: number, size: number
   ctx.restore()
 }
 
-/** Render the card. Resolves to a PNG blob. */
-export async function renderShareCard(input: ShareInput, skin: Skin): Promise<Blob> {
+function toPng(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise<Blob>((res, rej) => {
+    // A tainted canvas throws SecurityError here (WebKit) instead of calling back.
+    try { canvas.toBlob(b => (b ? res(b) : rej(new Error('toBlob returned no image'))), 'image/png') }
+    catch (error) { rej(error) }
+  })
+}
+
+/**
+ * Render the card. Resolves to a PNG blob. Fonts and skin tiles wait at most 5 s each. If the
+ * PNG can't be made (tainted canvas, toBlob failure), the card is drawn again with solid fills
+ * only (no skin pattern tiles) and tried once more. `onIssue` hears about every problem.
+ */
+export async function renderShareCard(input: ShareInput, skin: Skin, onIssue: CardIssue = () => {}): Promise<Blob> {
+  try { await within(Promise.resolve(document.fonts?.ready), CARD_WAIT_MS, 'document.fonts.ready') }
+  catch (error) { onIssue('share card fonts (system font used)', error) }
+  const tiles = await Promise.all(['dark', 'second', 'light'].map(async (k) => {
+    const u = cssUrl(`--kb-skin-${skin}-${k}`)
+    if (!u) return null
+    try { return await within(loadTile(u), CARD_WAIT_MS, `skin tile ${skin}-${k}`) }
+    catch (error) { onIssue(`share card skin tile ${skin}-${k}`, error); return null }
+  }))
+  try { return await toPng(drawCard(input, skin, tiles)) }
+  catch (error) {
+    onIssue('share card PNG with skin tiles (retrying with solid fills)', error)
+    return await toPng(drawCard(input, skin, [null, null, null]))
+  }
+}
+
+function drawCard(input: ShareInput, skin: Skin, tiles: Array<CanvasImageSource | null>): HTMLCanvasElement {
   const t = shareCardText(input)
   const canvas = document.createElement('canvas')
   canvas.width = W
   canvas.height = H
-  const ctx = canvas.getContext('2d')!
-  try { await document.fonts?.ready }
-  catch { /* system font */ }
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('canvas 2D context unavailable')
   const F = (w: number, px: number) => `${w} ${px}px Archivo, system-ui, sans-serif`
 
   ctx.fillStyle = C.bg
@@ -114,10 +165,8 @@ export async function renderShareCard(input: ShareInput, skin: Skin): Promise<Bl
 
   // the Stack, in the current skin
   const top = 700, cardH = 110, overlap = 16
-  const inks = ['dark', 'second', 'light']
   const fills = [C.lime, C.second, C.raised]
   const order = input.slices.map((s, i) => ({ ...s, i })).sort((a, b) => b.pct - a.pct)
-  const tiles = await Promise.all(inks.map(k => { const u = cssUrl(`--kb-skin-${skin}-${k}`); return u ? loadImage(u) : Promise.resolve(null) }))
   for (let r = order.length - 1; r >= 0; r--) {
     const s = order[r], y = top + r * (cardH - overlap), x = 88, w = W - 176
     ctx.save()
@@ -166,6 +215,5 @@ export async function renderShareCard(input: ShareInput, skin: Skin): Promise<Bl
   ctx.font = F(600, 28)
   const lw = ctx.measureText(t.link).width
   ctx.fillText(t.link, W - 128 - lw, 1236)
-
-  return await new Promise<Blob>((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not draw the card'))), 'image/png'))
+  return canvas
 }
