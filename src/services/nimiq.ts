@@ -47,6 +47,7 @@ export async function detectNimiqPay(): Promise<boolean> {
     return true
   }
   catch {
+    // Logged and recorded by getProvider ('init()'); no provider means a normal browser.
     return false
   }
   finally {
@@ -97,8 +98,25 @@ export async function whenHostReady<T>(what: string, fn: () => Promise<T>, onRet
   }
 }
 
-/** Reads a balance (with the not-ready retry) and records the raw result and timing for Diagnostics. */
-export async function readBalance(address: string, onRetry?: (attempt: number) => void): Promise<number> {
+/** getBalance gets this long per attempt; then the caller falls back to the RPC. */
+export const BALANCE_TIMEOUT_MS = 8000
+
+export class TimeoutError extends Error {
+  constructor(message: string) { super(message); this.name = 'TimeoutError' }
+}
+
+/** Reject with a TimeoutError when `p` takes longer than `ms`. */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const t = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TimeoutError(`${what}: no answer from Nimiq Pay after ${ms / 1000} s`)), ms) })
+  return Promise.race([p, t]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * Reads a balance (with the not-ready retry and an 8 s timeout per attempt) and records the raw
+ * result and timing for Diagnostics. Throws on a timeout or an answer that isn't a Luna amount.
+ */
+export async function readBalance(address: string, onRetry?: (attempt: number) => void, timeoutMs = BALANCE_TIMEOUT_MS): Promise<number> {
   const nimiq = await getProvider()
   const diag = useDiag()
   if (typeof nimiq.getBalance !== 'function') {
@@ -109,8 +127,9 @@ export async function readBalance(address: string, onRetry?: (attempt: number) =
   return whenHostReady('getBalance', async () => {
     const t0 = performance.now()
     try {
-      const raw = await nimiq.getBalance(address)
+      const raw = await withTimeout(nimiq.getBalance(address), timeoutMs, 'getBalance')
       diag.recordBalance(raw, performance.now() - t0)
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) throw new Error(`getBalance returned ${JSON.stringify(raw)}, not a Luna amount`)
       return raw
     }
     catch (error) {

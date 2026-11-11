@@ -9,6 +9,10 @@ import { cacheGet, cacheSet, prefGet, prefSet } from '../lib/cache'
 import { useDry } from './dry'
 import { getAccountBalance, getAccountType, spaced } from '../services/chain'
 import { pickBasic } from '../lib/wallets'
+import { logError } from '../lib/logError'
+
+/** One wallet balance refresh at a time per address (connect and the live refresh both ask). */
+let balanceInflight: { address: string, p: Promise<void> } | null = null
 
 /**
  * detecting:  waiting to see if Nimiq Pay injects the provider
@@ -51,8 +55,11 @@ export const useWallet = defineStore('wallet', {
     previewAddress: (prefGet('preview') || '') as string,
     /** Balance of the preview address, from RPC getAccountByAddress. */
     previewBalanceLuna: 0,
-    /** Where the wallet balance came from; '' = not known yet (never show a fake 0). */
+    /** Where the wallet balance came from; '' = not known yet (never show a fake 0). 'cache' = saved, stale. */
     balanceSource: '' as '' | 'sdk' | 'rpc' | 'cache',
+    /** When the shown balance was read (ms). For 'cache' this is the time of the saved value. */
+    balanceAt: 0,
+    /** Set when Nimiq Pay and the RPC both failed (a saved balance may still be shown, marked stale). */
     balanceError: '',
     /** Basic (non-contract) accounts Nimiq Pay listed. More than one: "Choose wallet". */
     basicAccounts: [] as string[],
@@ -71,6 +78,10 @@ export const useWallet = defineStore('wallet', {
     effectiveBalanceNim(): number { return lunaToNim(this.effectiveBalanceLuna) },
     /** False until a real balance (SDK, RPC or cache) is known. */
     balanceKnown(s): boolean { return s.env === 'mock' || !!s.previewAddress || useDry().on || s.balanceSource !== '' },
+    /** The wallet balance shown is a saved value, not a fresh read. */
+    balanceStale(s): boolean { return s.env === 'nimiqpay' && !s.previewAddress && !useDry().on && s.balanceSource === 'cache' },
+    /** A preview address is shown instead of the connected Nimiq Pay account. */
+    previewingOther(s): boolean { return !!s.previewAddress && s.env === 'nimiqpay' && !!s.address && s.previewAddress.replace(/\s/g, '') !== s.address.replace(/\s/g, '') },
     isDry: s => s.env !== 'mock' && useDry().on,
   },
   actions: {
@@ -107,37 +118,54 @@ export const useWallet = defineStore('wallet', {
       diag.listAccountsMs = 0
       diag.recordBalance(this.balanceLuna, 0)
     },
-    setBalance(luna: number, source: 'sdk' | 'rpc' | 'cache') {
+    setBalance(luna: number, source: 'sdk' | 'rpc' | 'cache', at = Date.now()) {
       this.balanceLuna = luna
       this.balanceSource = source
-      this.balanceError = ''
-      if (source !== 'cache') cacheSet('bal:' + this.address.replace(/\s/g, ''), luna)
+      this.balanceAt = at
+      if (source !== 'cache') {
+        this.balanceError = ''
+        cacheSet('bal:' + this.address.replace(/\s/g, ''), luna)
+      }
     },
     /**
-     * Wallet balance: cached value at once, then the SDK (retrying while the
-     * host syncs). If the host says "not ready", the RPC balance fills in
-     * meanwhile. An error only when the SDK and the RPC both fail.
+     * Wallet balance: a saved value at once (marked stale), then Nimiq Pay's getBalance (retried
+     * while the host syncs, 8 s per attempt). If the host is not ready, times out or fails, the
+     * RPC node of the current network fills in for the same address. When both fail, a visible
+     * error is set (a saved value stays on screen, marked stale).
      */
-    async refreshWalletBalance() {
-      if (this.env !== 'nimiqpay' || !this.address) return
+    refreshWalletBalance(): Promise<void> {
+      if (this.env !== 'nimiqpay' || !this.address) return Promise.resolve()
       const address = this.address
+      if (balanceInflight?.address === address) return balanceInflight.p
+      const p = this.readWalletBalance(address).finally(() => { if (balanceInflight?.p === p) balanceInflight = null })
+      balanceInflight = { address, p }
+      return p
+    },
+    async readWalletBalance(address: string) {
       if (!this.balanceSource) {
         const c = cacheGet<number>('bal:' + address.replace(/\s/g, ''))
-        if (c) this.setBalance(c.v, 'cache')
+        if (c) this.setBalance(c.v, 'cache', c.t)
       }
-      let rpcTried = false
-      const fallback = () => {
-        if (rpcTried) return
-        rpcTried = true
-        getAccountBalance(address).then((r) => { if (this.balanceSource !== 'sdk') this.setBalance(r.value, 'rpc') }).catch(() => {})
-      }
+      // The RPC fallback, started at most once (on the first "not ready" retry, or after a failure).
+      let rpcP: Promise<boolean> | null = null
+      const fallback = (): Promise<boolean> => rpcP ??= getAccountBalance(address, 0).then((r) => {
+        if (this.address !== address) return true
+        if (this.balanceSource !== 'sdk') this.setBalance(r.value, r.stale ? 'cache' : 'rpc', r.at)
+        if (r.stale) logError('balance RPC fallback', new Error('RPC failed; showing the last saved RPC balance'))
+        return !r.stale
+      }, (error: unknown) => {
+        logError('balance RPC fallback', error)
+        return false
+      })
       try {
-        this.setBalance(await readBalance(address, fallback), 'sdk')
+        const luna = await readBalance(address, () => { void fallback() })
+        if (this.address === address) this.setBalance(luna, 'sdk')
       }
       catch (error) {
-        fallback()
-        await new Promise(r => setTimeout(r, 4000))
-        if (!this.balanceSource) this.balanceError = (error as Error).message || 'Balance unavailable'
+        logError('getBalance gave up, using the network node', error)
+        const rpcOk = await fallback()
+        if (this.address !== address || rpcOk || this.balanceSource === 'sdk') return
+        this.balanceError = `Nimiq Pay: ${(error as Error)?.message || String(error)}. The network node didn't answer either.`
       }
     },
     /** Read the live balance right before a money action (dry run: the fake chain). */
@@ -155,10 +183,10 @@ export const useWallet = defineStore('wallet', {
       diag.busy = true
       try {
         if (this.env === 'mock') diag.recordBalance(this.balanceLuna, 0)
-        else if (this.env === 'nimiqpay') this.balanceLuna = await readBalance(this.address)
+        else if (this.env === 'nimiqpay') this.setBalance(await readBalance(this.address), 'sdk')
         await diag.loadRpc(this.effectiveAddress)
       }
-      catch { /* recorded in diag */ }
+      catch (error) { logError('Run getBalance again', error) }
       finally { diag.busy = false }
     },
     async connect(): Promise<ConnectResult> {
@@ -177,11 +205,13 @@ export const useWallet = defineStore('wallet', {
         // are offered read only; contracts (vesting, HTLC) are skipped. Types are read in the
         // background so a slow RPC never holds up Connect.
         this.address = account.accounts[0]
-        this.basicAccounts = [account.accounts[0]]
+        // Every listed account can be picked at once; contracts drop out when their types arrive.
+        this.basicAccounts = account.accounts.slice()
         if (account.accounts.length > 1) {
           const types: Record<string, string | null> = {}
           void Promise.all(account.accounts.slice(1).map(async (a) => { types[a] = await getAccountType(a) }))
             .then(() => { if (this.address === account.accounts[0]) this.basicAccounts = pickBasic(account.accounts, types).basic })
+            .catch((error: unknown) => logError('account types', error))
         }
         this.connected = true
         this.balanceSource = ''

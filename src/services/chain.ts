@@ -1,5 +1,5 @@
 // Reading staking and payouts from the chain (read-only).
-import { rpc, rpcPeek } from './rpc'
+import { RpcError, rpc, rpcPeek } from './rpc'
 import type { Result } from './rpc'
 import { prefGet, prefSet } from '../lib/cache'
 import { knownReward } from './knownPools'
@@ -68,9 +68,18 @@ export function getStaker(address: string, ttl = 60e3): Promise<Result<Staker | 
   return rpc<Staker | null>('getStakerByAddress', [address], { ttl })
 }
 
+/**
+ * Balance in Luna from getAccountByAddress. A node answers balance 0 for an address it has
+ * never seen, so 0 is a real answer; a missing or non-numeric balance throws instead of
+ * becoming 0. `stale: true` means the request failed and this is an older cached value.
+ */
 export function getAccountBalance(address: string, ttl = 60e3): Promise<Result<number>> {
   return rpc<{ balance: number }>('getAccountByAddress', [address], { ttl })
-    .then(r => ({ ...r, value: Number(r.value?.balance) || 0 }))
+    .then((r) => {
+      const v = r.value?.balance
+      if (typeof v !== 'number' || !Number.isFinite(v)) throw new RpcError('BAD_ANSWER', `getAccountByAddress gave no balance (${JSON.stringify(r.value)})`, undefined, 'getAccountByAddress')
+      return { ...r, value: v }
+    })
 }
 
 /** Account type from RPC: 'basic', 'vesting', 'htlc', 'staking' (null when it can't be read). */

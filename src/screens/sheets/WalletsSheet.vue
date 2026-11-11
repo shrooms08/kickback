@@ -6,6 +6,7 @@ import { useUi } from '../../stores/ui'
 import { getAccountBalance } from '../../services/chain'
 import { nim2 } from '../../lib/format'
 import { switchWallet } from '../../flows'
+import { logError } from '../../lib/logError'
 
 // Choose wallet: only basic accounts from Nimiq Pay (contracts are never listed).
 const wallet = useWallet()
@@ -13,7 +14,10 @@ const ui = useUi()
 const bal = ref<Record<string, string>>({})
 onMounted(() => {
   if (wallet.isMock) { bal.value = { [wallet.basicAccounts[0]]: '31,480.55 NIM', [wallet.basicAccounts[1]]: '1,204.10 NIM' }; return }
-  for (const a of wallet.basicAccounts) getAccountBalance(a).then((r) => { bal.value = { ...bal.value, [a]: `${nim2(r.value / 1e5)} NIM` } }).catch(() => {})
+  for (const a of wallet.basicAccounts) {
+    getAccountBalance(a).then((r) => { bal.value = { ...bal.value, [a]: `${nim2(r.value / 1e5)} NIM${r.stale ? ' (saved)' : ''}` } })
+      .catch((error: unknown) => { logError(`Choose wallet: balance of ${a}`, error); bal.value = { ...bal.value, [a]: 'Balance unavailable' } })
+  }
 })
 const short = (a: string) => { const g = a.split(' '); return `${g[0]} ${g[1]} … ${g[g.length - 1]}` }
 function pick(a: string) {
